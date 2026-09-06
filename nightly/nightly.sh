@@ -1,14 +1,14 @@
 #!/bin/bash
 
-set -e
+set -ex
 
 # Set up the environment variables.
 
 SCRIPTS=$(cd $(dirname $0); pwd)
-ROOT="$SCRIPTS/.."
+ROOT=$(realpath -m "$SCRIPTS/..")
 REFS=$ROOT
 
-eval set -- $(getopt -o '' --long clean,upload,nosign,prune -- "$@")
+eval set -- $(getopt -o '' --long clean,upload,nosign,prune,nopull -- "$@")
 
 DISTRIBUTE_ARGS=
 
@@ -38,6 +38,11 @@ while true; do
             PRUNE=1
             shift
             ;;
+
+        --nopull)
+            NOPULL=1
+            shift
+            ;;
     esac
 done
 
@@ -47,8 +52,8 @@ if [ -z "$1" ]; then
     exit
 fi
 
-BASE="$1"
-VENV="$1/tmp/virtualenv.py3"
+BASE=$(realpath -m "$1")
+VENV="$BASE/renpy/.venv"
 BRANCH="${2:-master}"
 
 export RENPY_DEPS_INSTALL=/usr::/usr/lib/x86_64-linux-gnu/
@@ -57,16 +62,17 @@ export RENPY_DEPS_INSTALL=/usr::/usr/lib/x86_64-linux-gnu/
 
 mkdir -p "$BASE/tmp"
 
+# Python activates the venv, which is needed for the rest of it.
+. $SCRIPTS/python.sh
+
 # Clean, if required.
 
 if [ "$CLEAN" = 1 ]; then
     pushd $BASE
-    ./build.py clean
+    ./build.sh clean
     popd
 fi
 
-# Python activates the venv, which is needed for the rest of it.
-. $SCRIPTS/python.sh
 . $SCRIPTS/rev.sh
 . $SCRIPTS/build.sh
 . $SCRIPTS/web.sh

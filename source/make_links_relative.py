@@ -1,14 +1,9 @@
-#!/usr/bin/env python3
-
 import pathlib
 import sys
 import os
 
 
 def main():
-    if __name__ == "__main__":
-        pass
-
     root = pathlib.Path(sys.argv[1]).resolve()
 
     for i in root.rglob("*"):
@@ -28,7 +23,7 @@ def main():
         i.unlink()
         os.symlink(target, i)
 
-        print(i, "->" , target)
+        print(i, "->", target)
 
 
 if __name__ == "__main__":

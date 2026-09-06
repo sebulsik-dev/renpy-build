@@ -1,14 +1,10 @@
-from __future__ import division, absolute_import, with_statement, print_function, unicode_literals
-
 import webbrowser
 import textwrap
 import sys
 import time
-import subprocess
-import urllib
 
-class Interface(object):
 
+class Interface:
     def write(self, s, style=""):
         """
         Writes out s, in the given style and color.
@@ -73,7 +69,6 @@ class Interface(object):
         self.write(prompt)
 
         while True:
-
             if default is True:
                 prompt = "yes/no [yes]> "
             elif default is False:
@@ -91,8 +86,6 @@ class Interface(object):
             elif choice == "" and default is not None:
                 return default
 
-        print
-
     def terms(self, url, prompt):
         """
         Displays `url` to the user, and then prompts the user to accept the
@@ -101,15 +94,15 @@ class Interface(object):
         If the user doesn't accept, gives up.
         """
 
-        self.info("Opening {} in a web browser.".format(url))
+        self.info(f"Opening {url} in a web browser.")
 
         webbrowser.open_new(url)
-        time.sleep(.5)
+        time.sleep(0.5)
 
         if not self.yesno(prompt):
             self.fail("You must accept the terms and conditions to proceed.")
 
-    def input(self, prompt, empty=None): # @ReservedAssignment
+    def input(self, prompt, empty=None):
         """
         Prompts the user for input. The input is expected to be a string, which
         is stripped of leading and trailing whitespace. If `empty` is true,
@@ -120,9 +113,8 @@ class Interface(object):
         self.write(prompt)
 
         while True:
-
             if empty:
-                prompt = "[{}]> ".format(empty)
+                prompt = f"[{empty}]> "
             else:
                 prompt = "> "
 
@@ -134,8 +126,6 @@ class Interface(object):
 
             if empty is not None:
                 return empty
-
-        print
 
     def choice(self, prompt, choices, default=None):
         """
@@ -156,20 +146,19 @@ class Interface(object):
         self.write(prompt)
 
         for i, (value, label) in enumerate(choices):
-
             i += 1
 
             if value == default:
                 default_choice = i
 
-            self.write("{}) {}".format(i, label), Style.BRIGHT)
+            self.write(f"{i}) {label}", Style.BRIGHT)
 
         print()
 
         if default_choice is not None:
-            prompt = "1-{} [{}]> ".format(len(choices), default_choice)
+            prompt = f"1-{len(choices)} [{default_choice}]> "
         else:
-            prompt = "1-{}> ".format(len(choices))
+            prompt = f"1-{len(choices)}> "
 
         while True:
             try:
@@ -181,15 +170,13 @@ class Interface(object):
                         choice = default_choice
                     else:
                         continue
-            except:
+            except Exception:
                 continue
 
             choice -= 1
 
             if choice >= 0 and choice < len(choices):
                 return choices[choice][0]
-
-        print
 
     def fail(self, prompt):
         """

@@ -1,15 +1,17 @@
 import os
 import re
+import sys
 import shlex
 import subprocess
-import sys
 import sysconfig
-import threading
 
-import jinja2
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+
+from .context import Context
 
 # This caches the results of emsdk_environment.
-emsdk_cache : dict[str, str] = { }
+emsdk_cache: dict[str, str] = {}
+
 
 def emsdk_environment(c):
     """
@@ -22,15 +24,14 @@ def emsdk_environment(c):
         return
 
     if not emsdk_cache:
-
         env = dict(os.environ)
         env["EMSDK_BASH"] = "1"
         env["EMSDK_QUIET"] = "1"
 
-        bash = subprocess.check_output([ str(emsdk), "construct_env" ], env=env, text=True)
+        bash = subprocess.check_output([str(emsdk), "construct_env"], env=env, text=True)
 
         for l in bash.split("\n"):
-            m = re.match(r'export (\w+)=\"(.*?)\";?$', l)
+            m = re.match(r"export (\w+)=\"(.*?)\";?$", l)
             if m:
                 emsdk_cache[m.group(1)] = m.group(2)
 
@@ -38,7 +39,7 @@ def emsdk_environment(c):
         c.env(k, v)
 
 
-def llvm(c, bin="", prefix="", suffix="-18", clang_args="", use_ld=True):
+def llvm(c, bin="", prefix="", suffix="-22", clang_args="", use_ld=True):
 
     if bin:
         c.env("PATH", bin + ":{{ PATH }}")
@@ -49,7 +50,7 @@ def llvm(c, bin="", prefix="", suffix="-18", clang_args="", use_ld=True):
     c.var("llvm_prefix", prefix)
     c.var("llvm_suffix", suffix)
 
-    ld = c.expand("{{llvm_bin}}lld{{llvm_suffix}}")
+    c.expand("{{llvm_bin}}lld{{llvm_suffix}}")
 
     if use_ld:
         clang_args = "-fuse-ld=lld -Wno-unused-command-line-argument " + clang_args
@@ -64,10 +65,13 @@ def llvm(c, bin="", prefix="", suffix="-18", clang_args="", use_ld=True):
     c.var("clang_args", clang_args)
 
     c.env("CC", "ccache {{llvm_bin}}{{llvm_prefix}}clang{{llvm_suffix}} {{ clang_args }} -std=gnu17")
-    c.env("CXX", "ccache {{llvm_bin}}{{llvm_prefix}}clang++{{llvm_suffix}} {{ clang_args }} -std=gnu++17 {{ cxx_clang_args }}")
+    c.env(
+        "CXX",
+        "ccache {{llvm_bin}}{{llvm_prefix}}clang++{{llvm_suffix}} {{ clang_args }} -std=gnu++17 {{ cxx_clang_args }}",
+    )
     c.env("CPP", "ccache {{llvm_bin}}{{llvm_prefix}}clang{{llvm_suffix}} {{ clang_args }} -E")
+    c.env("OBJC", "ccache {{llvm_bin}}{{llvm_prefix}}clang{{llvm_suffix}} {{ clang_args }} ")
 
-    # c.env("LD", "ccache " + ld)
     c.env("AR", "{{llvm_bin}}llvm-ar{{llvm_suffix}}")
     c.env("RANLIB", "{{llvm_bin}}llvm-ranlib{{llvm_suffix}}")
     c.env("STRIP", "{{llvm_bin}}llvm-strip{{llvm_suffix}}")
@@ -75,9 +79,14 @@ def llvm(c, bin="", prefix="", suffix="-18", clang_args="", use_ld=True):
     c.env("READELF", "{{llvm_bin}}llvm-readelf{{llvm_suffix}}")
 
     c.env("WINDRES", "{{llvm_bin}}{{llvm_prefix}}windres{{llvm_suffix}}")
+    c.env("INSTALL_NAME_TOOL", "{{llvm_bin}}{{llvm_prefix}}llvm-install-name-tool{{llvm_suffix}}")
 
     if c.platform == "windows":
         c.env("RC", "{{WINDRES}}")
+
+    c.var("lipo", "{{llvm_bin}}llvm-lipo{{llvm_suffix}}")
+    c.var("otool", "{{llvm_bin}}llvm-otool{{llvm_suffix}}")
+
 
 def android_llvm(c, arch):
 
@@ -89,22 +98,23 @@ def android_llvm(c, arch):
     llvm(
         c,
         bin="{{cross}}/{{ndk_version}}/toolchains/llvm/prebuilt/linux-x86_64/bin",
-        prefix=f"{arch}-linux-android{ eabi }21-",
+        prefix=f"{arch}-linux-android{eabi}21-",
         suffix="",
         clang_args="",
         use_ld=False,
     )
+
 
 def build_environment(c):
     """
     Sets up the build environment inside the context.
     """
 
-    if c.platform == "web" and c.kind not in ( "host",  "host-python", "cross" ):
+    if c.platform == "web" and c.kind not in ("host", "cross"):
         emsdk_environment(c)
 
     if c.platform == "android":
-        c.var("ndk_version", "android-ndk-r27c")
+        c.var("ndk_version", "android-ndk-r29")
 
     cpuccount = os.cpu_count()
 
@@ -121,16 +131,16 @@ def build_environment(c):
     c.var("sysroot", c.tmp / f"sysroot.{c.platform}-{c.arch}")
     c.var("build_platform", sysconfig.get_config_var("HOST_GNU_TYPE"))
 
-    c.env("CPPFLAGS", "-I{{ install }}/include")
-    c.env("CFLAGS", "-O3 -I{{ install }}/include")
+    c.env("CPPFLAGS", "-I{{ install }}/include  -DSDL_MAIN_HANDLED")
+    c.env("CFLAGS", "-O3 -I{{ install }}/include -DSDL_MAIN_HANDLED")
     c.env("LDFLAGS", "-O3 -L{{install}}/lib")
 
     c.env("PATH", "{{ host }}/bin:{{ PATH }}")
 
     if (c.platform == "linux") and (c.arch == "x86_64"):
-        c.var("host_platform", "x86_64-pc-linux-gnu")
+        c.var("host_platform", "x86_64-linux-gnu")
     elif (c.platform == "linux") and (c.arch == "aarch64"):
-        c.var("host_platform", "aarch64-pc-linux-gnu")
+        c.var("host_platform", "aarch64-linux-gnu")
     elif (c.platform == "linux") and (c.arch == "armv7l"):
         c.var("host_platform", "arm-linux-gnueabihf")
     elif (c.platform == "windows") and (c.arch == "x86_64"):
@@ -192,24 +202,23 @@ def build_environment(c):
     elif (c.platform == "ios") and (c.arch == "sim-x86_64"):
         c.env("IPHONEOS_DEPLOYMENT_TARGET", "13.0")
 
-    c.var("lipo", "llvm-lipo-15")
+    c.env("PKG_CONFIG_PATH", "{{ install }}/lib/pkgconfig")
 
-
-    if c.kind == "host" or c.kind == "host-python" or c.kind == "cross":
-
+    if c.kind in ("host", "cross"):
         llvm(c)
         c.env("LDFLAGS", "{{ LDFLAGS }} -L{{install}}/lib64")
-        c.env("PKG_CONFIG_PATH", "{{ install }}/lib/pkgconfig")
 
         # c.var("cmake_system_name", "Linux")
         # c.var("cmake_system_processor", "x86_64")
         c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH={{ install }}")
 
     elif (c.platform == "linux") and (c.arch == "x86_64"):
-
         llvm(c, clang_args="-target {{ host_platform }} --sysroot {{ sysroot }} -fPIC -pthread")
         c.env("LDFLAGS", "{{ LDFLAGS }} -L{{install}}/lib64")
-        c.env("PKG_CONFIG_LIBDIR", "{{ sysroot }}/usr/lib/{{ architecture_name }}/pkgconfig:{{ sysroot }}/usr/share/pkgconfig")
+        c.env(
+            "PKG_CONFIG_LIBDIR",
+            "{{ sysroot }}/usr/lib/{{ architecture_name }}/pkgconfig:{{ sysroot }}/usr/share/pkgconfig",
+        )
         # c.env("PKG_CONFIG_SYSROOT_DIR", "{{ sysroot }}")
 
         c.var("cmake_system_name", "Linux")
@@ -217,10 +226,12 @@ def build_environment(c):
         c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ sysroot }}' -DCMAKE_SYSROOT={{ sysroot }}")
 
     elif (c.platform == "linux") and (c.arch == "aarch64"):
-
         llvm(c, clang_args="-target {{ host_platform }} --sysroot {{ sysroot }} -fPIC -pthread")
         c.env("LDFLAGS", "{{ LDFLAGS }} -L{{install}}/lib64")
-        c.env("PKG_CONFIG_LIBDIR", "{{ sysroot }}/usr/lib/{{ architecture_name }}/pkgconfig:{{ sysroot }}/usr/share/pkgconfig")
+        c.env(
+            "PKG_CONFIG_LIBDIR",
+            "{{ sysroot }}/usr/lib/{{ architecture_name }}/pkgconfig:{{ sysroot }}/usr/share/pkgconfig",
+        )
         # c.env("PKG_CONFIG_SYSROOT_DIR", "{{ sysroot }}")
 
         c.var("cmake_system_name", "Linux")
@@ -228,10 +239,15 @@ def build_environment(c):
         c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ sysroot }}' -DCMAKE_SYSROOT={{ sysroot }}")
 
     elif (c.platform == "linux") and (c.arch == "armv7l"):
-
-        llvm(c, clang_args="-target {{ host_platform }} --sysroot {{ sysroot }} -fPIC -pthread -mfpu=neon -mfloat-abi=hard")
+        llvm(
+            c,
+            clang_args="-target {{ host_platform }} --sysroot {{ sysroot }} -fPIC -pthread -mfpu=neon -mfloat-abi=hard",
+        )
         c.env("LDFLAGS", "{{ LDFLAGS }} -L{{install}}/lib32")
-        c.env("PKG_CONFIG_LIBDIR", "{{ sysroot }}/usr/lib/{{ architecture_name }}/pkgconfig:{{ sysroot }}/usr/share/pkgconfig")
+        c.env(
+            "PKG_CONFIG_LIBDIR",
+            "{{ sysroot }}/usr/lib/{{ architecture_name }}/pkgconfig:{{ sysroot }}/usr/share/pkgconfig",
+        )
         # c.env("PKG_CONFIG_SYSROOT_DIR", "{{ sysroot }}")
 
         c.var("cmake_system_name", "Linux")
@@ -239,7 +255,7 @@ def build_environment(c):
         c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ sysroot }}' -DCMAKE_SYSROOT={{ sysroot }}")
 
     elif (c.platform == "windows") and (c.arch == "x86_64"):
-
+        c.env("CFLAGS", "{{ CFLAGS }}")
         c.env("LDFLAGS", "{{ LDFLAGS }} -L{{install}}/lib64")
 
         llvm(
@@ -248,49 +264,59 @@ def build_environment(c):
             prefix="x86_64-w64-mingw32-",
             suffix="",
             clang_args="-target {{ host_platform }} --sysroot {{ cross }}/llvm-mingw/x86_64-w64-mingw32 -fPIC -pthread",
-            use_ld=False)
+            use_ld=False,
+        )
 
         c.var("cmake_system_name", "Windows")
         c.var("cmake_system_processor", "x86_64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/llvm-mingw/x86_64-w64-mingw32' -DCMAKE_SYSROOT={{ cross }}/llvm-mingw/x86_64-w64-mingw32")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/llvm-mingw/x86_64-w64-mingw32' -DCMAKE_SYSROOT={{ cross }}/llvm-mingw/x86_64-w64-mingw32",
+        )
 
     elif (c.platform == "android") and (c.arch == "x86_64"):
-
         android_llvm(c, "x86_64")
 
-        c.env("CFLAGS", "{{ CFLAGS }} -DSDL_MAIN_HANDLED")
+        c.env("CFLAGS", "{{ CFLAGS }}")
         c.env("LDFLAGS", "{{ LDFLAGS }} -Wl,-z,max-page-size=16384")
 
         c.var("cmake_system_name", "Android")
         c.var("cmake_system_processor", "x86_64")
         c.var("android_abi", "x86_64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH={{ install }} -DCMAKE_TOOLCHAIN_FILE={{cross}}/{{ndk_version}}/build/cmake/android.toolchain.cmake -DANDROID_ABI={{ android_abi }} -DANDROID_PLATFORM=android-21 -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH={{ install }} -DCMAKE_TOOLCHAIN_FILE={{cross}}/{{ndk_version}}/build/cmake/android.toolchain.cmake -DANDROID_ABI={{ android_abi }} -DANDROID_PLATFORM=android-21 -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF",
+        )
 
     elif (c.platform == "android") and (c.arch == "arm64_v8a"):
-
         android_llvm(c, "aarch64")
 
-        c.env("CFLAGS", "{{ CFLAGS }} -DSDL_MAIN_HANDLED")
+        c.env("CFLAGS", "{{ CFLAGS }}")
         c.env("LDFLAGS", "{{ LDFLAGS }} -Wl,-z,max-page-size=16384")
 
         c.var("cmake_system_name", "Android")
         c.var("cmake_system_processor", "aarch64")
         c.var("android_abi", "arm64-v8a")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH={{ install }} -DCMAKE_TOOLCHAIN_FILE={{cross}}/{{ndk_version}}/build/cmake/android.toolchain.cmake -DANDROID_ABI={{ android_abi }} -DANDROID_PLATFORM=android-21 -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH={{ install }} -DCMAKE_TOOLCHAIN_FILE={{cross}}/{{ndk_version}}/build/cmake/android.toolchain.cmake -DANDROID_ABI={{ android_abi }} -DANDROID_PLATFORM=android-21 -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF",
+        )
 
     elif (c.platform == "android") and (c.arch == "armeabi_v7a"):
-
         android_llvm(c, "armv7a")
 
-        c.env("CFLAGS", "{{ CFLAGS }} -DSDL_MAIN_HANDLED")
+        c.env("CFLAGS", "{{ CFLAGS }}")
+        c.env("LDFLAGS", "{{ LDFLAGS }} -Wl,-z,max-page-size=16384")
 
         c.var("cmake_system_name", "Android")
         c.var("cmake_system_processor", "armv7-a")
         c.var("android_abi", "armeabi-v7a")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH={{ install }} -DCMAKE_TOOLCHAIN_FILE={{cross}}/{{ndk_version}}/build/cmake/android.toolchain.cmake -DANDROID_ABI={{ android_abi }} -DANDROID_PLATFORM=android-21 -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH={{ install }} -DCMAKE_TOOLCHAIN_FILE={{cross}}/{{ndk_version}}/build/cmake/android.toolchain.cmake -DANDROID_ABI={{ android_abi }} -DANDROID_PLATFORM=android-21 -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF",
+        )
 
     elif (c.platform == "mac") and (c.arch == "x86_64"):
-
         llvm(
             c,
             clang_args="-target x86_64-apple-darwin14 --sysroot {{cross}}/sdk",
@@ -302,10 +328,12 @@ def build_environment(c):
 
         c.var("cmake_system_name", "Darwin")
         c.var("cmake_system_processor", "x86_64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk  -DCMAKE_INSTALL_NAME_TOOL={{ INSTALL_NAME_TOOL }}",
+        )
 
     elif (c.platform == "mac") and (c.arch == "arm64"):
-
         llvm(
             c,
             clang_args="-target arm64-apple-macos11 --sysroot {{cross}}/sdk",
@@ -317,59 +345,77 @@ def build_environment(c):
 
         c.var("cmake_system_name", "Darwin")
         c.var("cmake_system_processor", "aarch64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk -DCMAKE_INSTALL_NAME_TOOL={{ INSTALL_NAME_TOOL }}",
+        )
 
     elif (c.platform == "ios") and (c.arch == "arm64"):
-
         llvm(
             c,
             clang_args="-target arm64-apple-ios13.0 --sysroot {{cross}}/sdk",
         )
 
-        c.env("CFLAGS", "{{ CFLAGS }} -DSDL_MAIN_HANDLED -miphoneos-version-min=13.0")
+        c.env("CFLAGS", "{{ CFLAGS }} -miphoneos-version-min=13.0 -F{{cross}}/sdk/System/Library/SubFrameworks")
+        c.env("OBJCFLAGS", "{{ OBJCFLAGS }} -miphoneos-version-min=13.0 -F{{cross}}/sdk/System/Library/SubFrameworks")
         c.env("LDFLAGS", "{{ LDFLAGS }} -miphoneos-version-min=13.0 -lmockrt")
 
-        c.var("cmake_system_name", "Darwin")
+        c.var("cmake_system_name", "iOS")
         c.var("cmake_system_processor", "aarch64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk -DCMAKE_OSX_SYSROOT={{ cross }}/iPhoneOS.sdk -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_NAME_TOOL={{ INSTALL_NAME_TOOL }}",
+        )
 
     elif (c.platform == "ios") and (c.arch == "sim-arm64"):
-
         llvm(
             c,
             clang_args="-target arm64-apple-ios13.0-simulator --sysroot {{cross}}/sdk",
         )
 
-        c.env("CFLAGS", "{{ CFLAGS }} -DSDL_MAIN_HANDLED -mios-simulator-version-min=13.0")
+        c.env("CFLAGS", "{{ CFLAGS }} -mios-simulator-version-min=13.0 -F{{cross}}/sdk/System/Library/SubFrameworks")
+        c.env(
+            "OBJCFLAGS", "{{ OBJCFLAGS }} -mios-simulator-version-min=13.0 -F{{cross}}/sdk/System/Library/SubFrameworks"
+        )
         c.env("LDFLAGS", "{{ LDFLAGS }} -mios-version-min=13.0 -lmockrt")
 
-        c.var("cmake_system_name", "Darwin")
+        c.var("cmake_system_name", "iOS")
         c.var("cmake_system_processor", "aarch64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk -DCMAKE_OSX_SYSROOT={{ cross }}/iPhoneSimulator.sdk -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_NAME_TOOL={{ INSTALL_NAME_TOOL }}",
+        )
 
     elif (c.platform == "ios") and (c.arch == "sim-x86_64"):
-
         llvm(
             c,
             clang_args="-target x86_64-apple-ios13.0-simulator --sysroot {{cross}}/sdk",
         )
 
-        c.env("CFLAGS", "{{ CFLAGS }} -DSDL_MAIN_HANDLED -mios-simulator-version-min=13.0")
+        c.env("CFLAGS", "{{ CFLAGS }} -mios-simulator-version-min=13.0 -F{{cross}}/sdk/System/Library/SubFrameworks")
+        c.env(
+            "OBJCFLAGS", "{{ OBJCFLAGS }} -mios-simulator-version-min=13.0 -F{{cross}}/sdk/System/Library/SubFrameworks"
+        )
         c.env("LDFLAGS", "{{ LDFLAGS }} -mios-simulator-version-min=13.0 -lmockrt")
 
-        c.var("cmake_system_name", "Darwin")
+        c.var("cmake_system_name", "iOS")
         c.var("cmake_system_processor", "x86_64")
-        c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk")
+        c.var(
+            "cmake_args",
+            "-DCMAKE_FIND_ROOT_PATH='{{ install }};{{ cross }}/sdk' -DCMAKE_SYSROOT={{ cross }}/sdk -DCMAKE_OSX_SYSROOT={{ cross }}/iPhoneSimulator.sdk -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_INSTALL_NAME_TOOL={{ INSTALL_NAME_TOOL }}",
+        )
 
     elif (c.platform == "web") and (c.arch == "wasm") and (c.name != "web"):
-
         # Use emscripten wrapper to configure and build
         c.var("make", "emmake {{ make }}")
         c.var("configure", "emconfigure ./configure")
         c.var("cmake_configure", "emcmake cmake")
 
-        c.env("CFLAGS", "{{ CFLAGS }} -O3 -sUSE_SDL=2 -sUSE_LIBPNG -sUSE_LIBJPEG=1 -sUSE_BZIP2=1 -sUSE_ZLIB=1")
-        c.env("LDFLAGS", "{{ LDFLAGS }} -O3 -sUSE_SDL=2 -sUSE_LIBPNG -sUSE_LIBJPEG=1 -sUSE_BZIP2=1 -sUSE_ZLIB=1 -sEMULATE_FUNCTION_POINTER_CASTS=1")
+        c.env("CFLAGS", "{{ CFLAGS }} -O3 -sUSE_LIBPNG -sUSE_LIBJPEG=1 -sUSE_BZIP2=1 -sUSE_ZLIB=1")
+        c.env(
+            "LDFLAGS",
+            "{{ LDFLAGS }} -O3 -sUSE_LIBPNG -sUSE_LIBJPEG=1 -sUSE_BZIP2=1 -sUSE_ZLIB=1 -sEMULATE_FUNCTION_POINTER_CASTS=1",
+        )
 
         c.var("emscriptenbin", "{{ cross }}/upstream/emscripten")
         c.var("crossbin", "{{ cross }}/upstream/bin")
@@ -387,7 +433,10 @@ def build_environment(c):
         c.env("EMSCRIPTEN_TOOLS", "{{emscriptenbin}}/tools")
         c.env("EMSCRIPTEN", "{{emscriptenbin}}")
 
-        c.env("PKG_CONFIG_LIBDIR", "{{cross}}/upstream/emscripten/cache/sysroot/lib/pkgconfig:{{cross}}/upstream/emscripten/system/lib/pkgconfig")
+        c.env(
+            "PKG_CONFIG_LIBDIR",
+            "{{cross}}/upstream/emscripten/cache/sysroot/lib/pkgconfig:{{cross}}/upstream/emscripten/system/lib/pkgconfig",
+        )
         # Add pkg-file search path for emscripten, since emscripten locked PKG_CONFIG_LIBDIR
         c.env("EM_PKG_CONFIG_PATH", "{{ install }}/lib/pkgconfig")
 
@@ -401,17 +450,30 @@ def build_environment(c):
         c.var("cmake_system_processor", "generic")
         c.var("cmake_args", "-DCMAKE_FIND_ROOT_PATH={{ install }}")
 
-
-    if c.kind not in ( "host", "host-python", "cross" ):
+    if c.kind not in ("host", "cross"):
         c.env("PKG_CONFIG_LIBDIR", "{{ install }}/lib/pkgconfig:{{ PKG_CONFIG_LIBDIR }}")
-        c.var("cmake_args", "{{cmake_args}} -DCMAKE_SYSTEM_NAME={{ cmake_system_name }} -DCMAKE_SYSTEM_PROCESSOR={{ cmake_system_processor }} -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY")
+        c.var(
+            "cmake_args",
+            "{{cmake_args}} -DCMAKE_SYSTEM_NAME={{ cmake_system_name }} -DCMAKE_SYSTEM_PROCESSOR={{ cmake_system_processor }} -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY",
+        )
 
     c.env("PKG_CONFIG", "pkg-config --static")
 
-    c.env("CFLAGS", "{{ CFLAGS }} -DRENPY_BUILD")
+    c.env("CFLAGS", "{{ CFLAGS }} -DRENPY_BUILD -DCYTHON_NO_PYINIT_EXPORT")
     c.env("CXXFLAGS", "{{ CFLAGS }}")
 
-    c.var("cmake_args", "-G Ninja {{ cmake_args }} -DCMAKE_PROJECT_INCLUDE_BEFORE={{root}}/tools/cmake_build_variables.cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_PARALLEL_LEVEL=" + str(cpuccount))
+    if c.platform in ("mac", "ios"):
+        format_args = ' -DCMAKE_C_ARCHIVE_CREATE="<CMAKE_AR> --format=darwin qc <TARGET> <LINK_FLAGS> <OBJECTS>" -DCMAKE_CXX_ARCHIVE_CREATE="<CMAKE_AR> --format=darwin qc <TARGET> <LINK_FLAGS> <OBJECTS>"'
+    else:
+        format_args = ""
+
+    c.var(
+        "cmake_args",
+        "-G Ninja {{ cmake_args }}"
+        + format_args
+        + " -DCMAKE_PROJECT_INCLUDE_BEFORE={{root}}/tools/cmake_build_variables.cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_PARALLEL_LEVEL="
+        + str(cpuccount),
+    )
 
     # Used by zlib.
     if c.kind != "host":
@@ -437,41 +499,24 @@ def run(command, context, verbose=False, quiet=False):
         print("path:", context.cwd)
         print("args:", " ".join(repr(i) for i in args))
         import traceback
+
         traceback.print_stack()
         sys.exit(1)
 
-class RunCommand(threading.Thread):
 
-    def __init__(self, command, context):
-        super().__init__()
+class CommandResult:
+    """Stores the result of a single command execution."""
 
-        command = context.expand(command)
-        self.command = shlex.split(command)
-
-        self.cwd = context.cwd
-        self.environ = context.environ.copy()
-
-        self.start()
-
-
-    def run(self):
-        result = subprocess.run(self.command, cwd=self.cwd, env=self.environ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8")
-        self.output = result.stdout
-        self.code = result.returncode
-
-    def wait(self):
-        self.join()
+    def __init__(self, command_str: str, future: Future[tuple[str, int]]):
+        self.command_str = command_str
+        self.future = future
+        self.output: str = ""
+        self.code: int = 0
+        self.done: bool = False
 
     def report(self):
-        print ("-" * 78)
-
-        for i in self.command:
-            if " " in i:
-                print(repr(i), end=" ")
-            else:
-                print(i, end=" ")
-
-        print()
+        print("-" * 78)
+        print(self.command_str)
         print()
         print(self.output)
 
@@ -479,11 +524,13 @@ class RunCommand(threading.Thread):
             print()
             print(f"Process failed with {self.code}.")
 
-class RunGroup(object):
 
-    def __init__(self, context):
+class RunGroup:
+    def __init__(self, context: Context, wait_all: bool = True):
+        self.executor = ThreadPoolExecutor()
         self.context = context
-        self.tasks = [ ]
+        self.futures: list[CommandResult] = []
+        self.wait_all = wait_all
 
     def __enter__(self):
         return self
@@ -492,22 +539,99 @@ class RunGroup(object):
         if exc_type is not None:
             return
 
-        for i in self.tasks:
-            i.wait()
+        # If there are no tasks to do, exit early
+        if not next(not f.done for f in self.futures):
+            return
 
-        good = [ i for i in self.tasks if i.code == 0 ]
-        bad = [ i for i in self.tasks if i.code != 0 ]
+        futures = [f.future for f in self.futures]
+        total = len(futures)
+        completed = 0
+        failed = 0
 
-        for i in good:
-            i.report()
+        stderr = sys.stderr
+        if stderr is None:
+            stderr = open(os.devnull, "w")
 
-        for i in bad:
-            i.report()
+        spinner_chars = "|/-\\"
+        spinner_i = 0
+        last_write_len = 0
+        interrupted = False
 
-        if bad:
-            print()
-            print("{} tasks failed.".format(len(bad)))
+        while futures:
+            try:
+                future = next(as_completed(futures, 0.1))
+                cmd_result = next(f for f in self.futures if f.future == future)
+                futures.remove(future)
+
+                # Clean last spinner output
+                print(f"\r{' ' * last_write_len}\r", end="", file=stderr)
+
+                cmd_result.output, cmd_result.code = future.result()
+                cmd_result.done = True
+                cmd_result.report()
+
+                if cmd_result.code == 0:
+                    completed += 1
+                else:
+                    failed += 1
+
+            except TimeoutError:
+                pass
+
+            except KeyboardInterrupt:
+                interrupted = True
+
+            # Update spinner output after new report or timeout
+            spinner_i = (spinner_i + 1) % len(spinner_chars)
+            failed_str = f" ({failed} failed)" if failed else ""
+            out_text = f"Run group working... {spinner_chars[spinner_i]} {completed}/{total}{failed_str}"
+            print(f"\r{out_text}", end="", file=stderr)
+            stderr.flush()
+            last_write_len = len(out_text)
+
+            if not self.wait_all and failed > 0:
+                break
+
+            if interrupted:
+                break
+
+        if interrupted:
+            self.executor.shutdown(wait=False, cancel_futures=True)
+            print("\nRun group interrupted.")
+            raise KeyboardInterrupt
+
+        # Clear the spinner line before exiting
+        print(f"\r{' ' * last_write_len}\r", end="", file=stderr)
+        stderr.flush()
+
+        if failed > 0:
+            if self.wait_all:
+                print(f"\n{failed} tasks failed.")
+
+                for result in (r for r in self.futures if r.code):
+                    result.report()
+
             sys.exit(1)
 
-    def run(self, command):
-        self.tasks.append(RunCommand(command, self.context))
+    def _execute_command(self, command: list[str], cwd: str, env: dict):
+        process = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            encoding="utf-8",
+            check=False,
+        )
+        return process.stdout, process.returncode
+
+    def run(self, command: str):
+        command = self.context.expand(command)
+        cmd_env = self.context.environ.copy()
+        future = self.executor.submit(
+            self._execute_command,
+            shlex.split(command),
+            str(self.context.cwd),
+            cmd_env,
+        )
+        self.futures.append(CommandResult(command, future))

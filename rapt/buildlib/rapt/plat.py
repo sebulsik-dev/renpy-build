@@ -1,19 +1,14 @@
 # This sets up various variables and commands based on the platform we're on.
 
-from __future__ import print_function
+import os
+import platform
+import shutil
 
 ##############################################################################
 # These are set based on the platform we're on.
 windows = False
 macintosh = False
 linux = False
-
-import sys
-import os
-import platform
-import traceback
-import shutil
-import subprocess
 
 
 def translate(s):
@@ -87,11 +82,7 @@ else:
     gradlew = "project/gradlew"
 
 # The path to RAPT.
-
-if sys.version_info.major >= 3:
-    RAPT_PATH = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-else:
-    RAPT_PATH = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__.decode(sys.getfilesystemencoding())))))
+RAPT_PATH = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def path(path, relative=False):
@@ -107,6 +98,7 @@ def path(path, relative=False):
         path = os.path.join(RAPT_PATH, path)
 
     return path
+
 
 jdk_requirement = 21
 sdk_version = "11076708_latest"
@@ -135,6 +127,12 @@ def rename(src, dst):
         shutil.rmtree(dst)
     elif os.path.exists(dst):
         os.unlink(dst)
+
+    try:
+        os.replace(src, dst)
+        return
+    except Exception:
+        pass
 
     if os.path.isdir(src):
         shutil.copytree(src, dst)

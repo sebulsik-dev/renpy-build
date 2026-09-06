@@ -1,52 +1,29 @@
-#!/usr/bin/env python
-
-from __future__ import division, absolute_import, with_statement, print_function, unicode_literals
-from renpy.compat import PY2, basestring, bchr, bord, chr, open, pystr, range, str, tobytes, unicode # *
-
-import pygame_sdl2
-import sys
-
-import re
-import tarfile
-import os
-import shutil
-import time
-import zipfile
+import concurrent.futures
 import gzip
-import subprocess
 import hashlib
-import collections
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+import time
 
-from . import plat
-from . import iconmaker
-from .properties import set_property, local_properties, bundle_properties
-from .keys import update_project_keys, get_local_key_properties
+import jinja2
 
-import rapt.plat as plat
-import rapt.iconmaker as iconmaker
-import rapt.install_sdk as install_sdk
+from . import configure, iconmaker, install_sdk, plat
+from .keys import get_local_key_properties, update_project_keys
+from .properties import bundle_properties, local_properties, set_property
 
 __ = plat.__
 
-sys.path.append(os.path.join(plat.RAPT_PATH, "buildlib", "jinja2.egg"))
 
-import jinja2
-import rapt.configure as configure
-
-# If we have python 2.7, record the path to it.
-if sys.version_info.major == 2 and sys.version_info.minor == 7:
-    PYTHON = sys.executable
-else:
-    PYTHON = None
-
-
-class PatternList(object):
+class PatternList:
     """
     Used to load in the blocklist and keeplist patterns.
     """
 
     def __init__(self, *args):
-        self.patterns = [ ]
+        self.patterns = []
 
         for i in args:
             self.load(plat.path(i))
@@ -68,8 +45,7 @@ class PatternList(object):
         return False
 
     def load(self, fn):
-
-        with open(fn, "r") as f:
+        with open(fn) as f:
             for l in f:
                 l = l.strip()
                 if not l:
@@ -89,21 +65,21 @@ class PatternList(object):
 
         while pattern:
             if pattern.startswith("**"):
-                regexp += r'.*'
+                regexp += r".*"
                 pattern = pattern[2:]
             elif pattern[0] == "*":
-                regexp += r'[^/]*'
+                regexp += r"[^/]*"
                 pattern = pattern[1:]
-            elif pattern[0] == '[':
-                regexp += r'['
+            elif pattern[0] == "[":
+                regexp += r"["
                 pattern = pattern[1:]
 
-                while pattern and pattern[0] != ']':
+                while pattern and pattern[0] != "]":
                     regexp += pattern[0]
                     pattern = pattern[1:]
 
                 pattern = pattern[1:]
-                regexp += ']'
+                regexp += "]"
 
             else:
                 regexp += re.escape(pattern[0])
@@ -121,8 +97,9 @@ def should_autoescape(fn):
 
     return fn.endswith(".xml")
 
+
 # Used by render.
-environment = jinja2.Environment(loader=jinja2.FileSystemLoader(plat.path('')), autoescape=should_autoescape)
+environment = jinja2.Environment(loader=jinja2.FileSystemLoader(plat.path("")), autoescape=should_autoescape)
 
 
 def render(always, template, dest, **kwargs):
@@ -142,18 +119,8 @@ def render(always, template, dest, **kwargs):
     template = environment.get_template(template)
     text = template.render(**kwargs)
 
-    f = open(dest, "wb")
-    f.write(text.encode("utf-8"))
-    f.close()
-
-
-def compile_dir(iface, dfn):
-    """
-    Compile *.py in directory `dfn` to *.pyo
-    """
-
-    # -OO = strip docstrings
-    iface.call([PYTHON, '-O', '-m', 'compileall', '-f', dfn])
+    with open(dest, "wb") as f:
+        f.write(text.encode("utf-8"))
 
 
 def make_tar(iface, fn, source_dirs):
@@ -161,7 +128,7 @@ def make_tar(iface, fn, source_dirs):
     Make a zip file `fn` from the contents of source_dis.
     """
 
-    source_dirs = [ plat.path(i) for i in source_dirs ]
+    source_dirs = [plat.path(i) for i in source_dirs]
 
     def include(fn):
         rv = True
@@ -174,14 +141,12 @@ def make_tar(iface, fn, source_dirs):
 
         return rv
 
-    # zf = zipfile.ZipFile(fn, "w")
     tf = tarfile.open(fn, "w:gz", format=tarfile.GNU_FORMAT)
 
     added = set()
 
     def add(fn, relfn):
-
-        adds = [ ]
+        adds = []
 
         while relfn:
             adds.append((fn, relfn))
@@ -191,17 +156,14 @@ def make_tar(iface, fn, source_dirs):
         adds.reverse()
 
         for fn, relfn in adds:
-
             if relfn not in added:
                 added.add(relfn)
                 tf.add(fn, relfn, recursive=False)
 
     for sd in source_dirs:
-
         sd = os.path.abspath(sd)
 
-        for dir, dirs, files in os.walk(sd): # @ReservedAssignment
-
+        for dir, dirs, files in os.walk(sd):
             for _fn in dirs:
                 fn = os.path.join(dir, _fn)
                 relfn = os.path.relpath(fn, sd)
@@ -217,34 +179,6 @@ def make_tar(iface, fn, source_dirs):
                     add(fn, relfn)
 
     tf.close()
-
-
-def make_tree(src, dest):
-
-    src = plat.path(src)
-    dest = plat.path(dest)
-
-    def ignore(dir, files):
-
-        rv = [ ]
-
-        for basename in files:
-            fn = os.path.join(dir, basename)
-            relfn = os.path.relpath(fn, src)
-
-            ignore = False
-
-            if blocklist.match(relfn):
-                ignore = True
-            if keeplist.match(relfn):
-                ignore = False
-
-            if ignore:
-                rv.append(basename)
-
-        return rv
-
-    shutil.copytree(src, dest, ignore=ignore)
 
 
 def copy_into(src, dest):
@@ -271,68 +205,200 @@ def copy_into(src, dest):
     shutil.copy2(src, dest)
 
 
+def make_assets_tree(src, dst):
+    """
+    Copies a subset of files from src to dst (governed by blocklist/keeplist)
+    in a single concurrent pass. Additionally, because Ren'Py uses a lot of
+    names that don't work as assets, every path segment is prefixed with 'x-'.
+    """
+
+    src = plat.path(src)
+    dst = plat.path(dst)
+
+    copy2 = shutil.copy2
+
+    def copy(pair):
+        old, new = pair
+
+        if old[-3:] == ".gz":
+            # AAPT unavoidably gunzips files with a .gz extension.
+            # To prevent this we temporarily double gzip such files,
+            # leaving AAPT to unpack them back into the original
+            # location. /o\
+            with open(old, "rb") as r, gzip.open(f'{new}.gz', "wb") as w:
+                shutil.copyfileobj(r, w)
+
+        else:
+            copy2(old, new)
+
+    def walk(old, new):
+        drop = blocklist.match
+        keep = keeplist.match
+
+        mkdir = os.mkdir
+        relpath = os.path.relpath
+        sep = os.sep
+
+        # join: Faster than os.path.join for our purposes.
+        join = lambda a, b: f"{a}{sep}{b}"
+
+        # Special case the top-level iteration where rel_path='.', then
+        # replace with normal join function in subsequent iterations.
+        # join1: ignore 1st arg
+        join1 = lambda a, b: b
+
+        cache = {old: new}
+
+        mkdir(new)
+
+        for old_stem, dirnames, filenames in os.walk(old):
+            new_stem = cache[old_stem]
+            rel_stem = relpath(old_stem, old)
+
+            visit = []
+
+            for name in dirnames:
+                rel_path = join1(rel_stem, name)
+
+                if drop(rel_path) and not keep(rel_path):
+                    continue
+
+                old_path = join(old_stem, name)
+                new_path = join(new_stem, f"x-{name}")
+
+                cache[old_path] = new_path
+                visit.append(name)
+
+                mkdir(new_path)
+
+            dirnames[:] = visit
+
+            for name in filenames:
+                rel_path = join1(rel_stem, name)
+
+                if drop(rel_path) and not keep(rel_path):
+                    continue
+
+                old_path = join(old_stem, name)
+                new_path = join(new_stem, f"x-{name}")
+
+                yield old_path, new_path
+
+            join1 = join
+
+    # Limiting factor is I/O not CPU, so use a fixed value for max workers.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        for _ in executor.map(copy, walk(src, dst)):
+            pass
+
+
 MAX_SIZE = 1000000000
 
 
 def make_bundle_tree(src):
-
     src = plat.path(src)
-    sizes = collections.defaultdict(int)
 
-    targets = [
-        plat.path("project/ff1/src/main/assets"),
-        plat.path("project/ff2/src/main/assets"),
-        plat.path("project/ff3/src/main/assets"),
-        plat.path("project/ff4/src/main/assets"),
-        ]
+    dst = []
+    vol = {}
 
-    # Write at least one file in each assets directory, to make sure that
-    # all exist.
-    for i in targets:
+    rename = plat.rename
 
-            if os.path.isdir(i):
-                shutil.rmtree(i)
+    # Initialise an assets directory for each bundle and add a test
+    # file to make sure they exist and are writable.
+    for i in range(1, 5):
+        root = plat.path(f"project/ff{i}/src/main/assets")
 
-            try:
-                os.makedirs(i, 0o777)
-            except:
-                pass
+        if os.path.isdir(root):
+            shutil.rmtree(root)
 
-            with open(os.path.join(i, "00_pack.txt"), "w") as f:
-                f.write("Shiro was here.\n")
+        try:
+            os.makedirs(root, 0o777)
+        except Exception:
+            pass
 
-    for dirpath, _, filenames in os.walk(src):
+        with open(os.path.join(root, "00_pack.txt"), "w") as f:
+            f.write("Shiro was here.\n")
 
-        for fn in filenames:
+        dst.append(root)
+        vol[root] = 0
 
-            if fn[0] == ".":
-                continue
+    def move(pair):
+        old, new = pair
 
-            old = os.path.join(dirpath, fn)
-            size = os.path.getsize(old)
+        rename(old, new)
 
-            matchfn = os.path.relpath(old, src)
+    def walk(old, new):
+        drop = blocklist.match
+        keep = keeplist.match
 
-            if blocklist.match(matchfn) and not keeplist.match(matchfn):
-                continue
+        getsize = os.path.getsize
+        makedirs = os.makedirs
+        relpath = os.path.relpath
+        sep = os.sep
 
-            for target in targets:
-                if sizes[target] + size <= MAX_SIZE:
-                    break
-            else:
-                raise Exception("Game too big for bundle, or single file > 500MB.")
+        # join: Faster than os.path.join for our purposes.
+        join = lambda a, b: f"{a}{sep}{b}"
 
-            sizes[target] += size
+        # Special case the top-level iteration where rel_path='.', then
+        # replace with normal join function in subsequent iterations.
+        # join1: ignore 1st arg
+        # join2: ignore 2nd arg
+        join1 = lambda a, b: b
+        join2 = lambda a, b: a
 
-            new = os.path.join(target, os.path.relpath(dirpath, src), fn)
-            newdir = os.path.join(target, os.path.relpath(dirpath, src))
+        cache = set(new)
+        cache_add = cache.add
 
-            try:
-                os.makedirs(newdir, 0o777)
-            except:
-                pass
+        for old_stem, dirnames, filenames in os.walk(old):
+            rel_stem = relpath(old_stem, old)
 
-            plat.rename(old, new)
+            visit = []
+
+            for name in dirnames:
+                rel_path = join1(rel_stem, name)
+
+                if drop(rel_path) and not keep(rel_path):
+                    continue
+
+                visit.append(name)
+
+            dirnames[:] = visit
+
+            for name in filenames:
+                rel_path = join1(rel_stem, name)
+
+                if drop(rel_path) and not keep(rel_path):
+                    continue
+
+                old_path = join(old_stem, name)
+                old_size = getsize(old_path)
+
+                threshold = MAX_SIZE - old_size
+
+                for new_root in new:
+                    if vol[new_root] <= threshold:
+                        break
+                else:
+                    raise Exception("Game too big for bundle, or single file > 1 GB.")
+
+                vol[new_root] += old_size
+
+                new_stem = join2(new_root, rel_stem)
+
+                if new_stem not in cache:
+                    makedirs(new_stem)
+                    cache_add(new_stem)
+
+                new_path = join(new_stem, name)
+
+                yield old_path, new_path
+
+            join1 = join2 = join
+
+    # Limiting factor is I/O not CPU, so use a fixed value for max workers.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        for _ in executor.map(move, walk(src, dst)):
+            pass
 
 
 def join_and_check(base, sub):
@@ -355,18 +421,17 @@ def edit_file(fn, pattern, line):
 
     fn = plat.path(fn)
 
-    lines = [ ]
+    lines = []
 
-    with open(fn, "r") as f:
+    with open(fn) as f:
         for l in f:
-
             if re.match(pattern, l):
                 l = line + "\n"
 
             lines.append(l)
 
     with open(fn, "w") as f:
-        f.write(''.join(lines))
+        f.write("".join(lines))
 
 
 def zip_directory(zf, prefix, dn):
@@ -387,8 +452,7 @@ def copy_presplash(directory, name, default):
     Copies the presplash file.
     """
 
-    for ext in [ ".png", ".jpg" ]:
-
+    for ext in [".png", ".jpg"]:
         fn = os.path.join(directory, name + ext)
 
         if os.path.exists(fn):
@@ -406,11 +470,7 @@ def eliminate_pycache(directory):
     renaming them to remove the cache tag.
     """
 
-    if PY2:
-        return
-
     import pathlib
-    import sys
 
     paths = list(pathlib.Path(directory).glob("**/__pycache__/*.pyc"))
 
@@ -499,7 +559,8 @@ def copy_project(update_always=False):
         fn = plat.path(fn)
 
         if os.path.exists(fn):
-            return open(fn, "r").read().strip()
+            with open(fn) as f:
+                return f.read().strip()
         else:
             return None
 
@@ -549,6 +610,7 @@ def copy_libs():
 
         shutil.copytree(prototype, project)
 
+
 def size_tree(dn):
     """
     Returns the size of the tree `dn`, in bytes.
@@ -564,7 +626,9 @@ def size_tree(dn):
     return rv
 
 
-def build(iface, directory, base, install=False, bundle=False, launch=False, finished=None, permissions=[], version=None):
+def build(
+    iface, directory, base, install=False, bundle=False, launch=False, finished=None, permissions=[], version=None
+):
 
     if not os.path.isdir(directory):
         iface.fail(__("{} is not a directory.").format(directory))
@@ -583,11 +647,10 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
         iface.fail(__("Run configure before attempting to build the app."))
 
     if version is not None:
-
-        split_version = [ i for i in version.split(".") if i.isdigit() ]
+        split_version = [i for i in version.split(".") if i.isdigit()]
 
         if not split_version:
-            split_version = [ "1", "0" ]
+            split_version = ["1", "0"]
 
         config.version = ".".join(split_version)
 
@@ -627,66 +690,40 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
     assets = plat.path("project/app/src/main/assets")
 
     if os.path.isdir(assets):
-        shutil.rmtree(assets)
+        def on_rm_error(func, p, exc_info):
+            try:
+                os.chmod(p, 0o777)
+                func(p)
+            except Exception:
+                pass
+        for _ in range(3):
+            try:
+                shutil.rmtree(assets, onerror=on_rm_error)
+                break
+            except Exception:
+                time.sleep(0.3)
 
     big_bundle = bundle and size_tree(assets_dir) > 50 * 1024 * 1024
 
     def make_assets():
 
         if big_bundle:
-
             os.mkdir(assets)
             make_bundle_tree(assets_dir)
-
         else:
-
-            make_tree(assets_dir, assets)
-
-            # Ren'Py uses a lot of names that don't work as assets. Auto-rename
-            # them.
-            for dirpath, dirnames, filenames in os.walk(assets, topdown=False):
-
-                # Sort names longest to shortest to ensure that adding the "x-"
-                # prefix will not overwrite an asset before it has been moved.
-                names = sorted(dirnames + filenames, key=len, reverse=True)
-
-                for fn in names:
-                    if fn[0] == ".":
-                        continue
-
-                    old = os.path.join(dirpath, fn)
-                    new = os.path.join(dirpath, "x-" + fn)
-
-                    plat.rename(old, new)
-
-                    if new[-3:] != ".gz":
-                        continue
-
-                    # AAPT unavoidably gunzips files with a .gz extension.
-                    # To prevent this we temporarily double gzip such files,
-                    # leaving AAPT to unpack them back into the original
-                    # location. /o\
-
-                    old, new = new, new + ".gz"
-
-                    with open(old, "rb") as src, gzip.open(new, "wb") as out:
-                        shutil.copyfileobj(src, out)
-
-                    os.unlink(old)
+            make_assets_tree(assets_dir, assets)
 
     iface.background(make_assets)
 
     # Copy assets out of the prototype, and into the project.
-    copy_into(
-        plat.path("prototype/app/src/main/assets"),
-        assets)
+    copy_into(plat.path("prototype/app/src/main/assets"), assets)
 
     if not os.path.exists(plat.path("bin")):
         os.mkdir(plat.path("bin"), 0o777)
 
     iface.info(__("Packaging internal data."))
 
-    private_dirs = [ 'project/renpyandroid/src/main/private' ]
+    private_dirs = ["project/renpyandroid/src/main/private"]
 
     if private_dir is not None:
         private_dirs.append(private_dir)
@@ -700,7 +737,6 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
         private_version = hashlib.md5(f.read()).hexdigest()
 
     for always, template, i in GENERATED:
-
         render(
             always or config.update_always,
             template,
@@ -710,7 +746,7 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
             bundle=bundle,
             big_bundle=big_bundle,
             sdkpath=plat.path("Sdk"),
-            )
+        )
 
     if config.update_icons:
         iconmaker.IconMaker(directory, config)
@@ -725,7 +761,7 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
 
     # Find and clean the apkdirs.
 
-    apkdirs = [ ]
+    apkdirs = []
 
     if not bundle:
         apkdirs.append(plat.path("project/app/build/outputs/apk/release"))
@@ -741,7 +777,7 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
 
     # This is a list of generated files that need to be copied over to the
     # dists folder.
-    files = [ ]
+    files = []
 
     if bundle:
         command = "bundleRelease"
@@ -751,19 +787,16 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
         command = "assembleRelease"
 
     try:
-
-        iface.call([ plat.gradlew, "-p", plat.path("project"), command ], cancel=True)
+        iface.call([plat.gradlew, "-p", plat.path("project"), command], cancel=True)
 
     except subprocess.CalledProcessError:
-
         iface.fail(__("The build seems to have failed."))
 
     # Copy everything to bin.
 
     for i in apkdirs:
         for j in os.listdir(i):
-
-            for k in [ ".apk", ".aab" ]:
+            for k in [".apk", ".aab"]:
                 if j.endswith(k):
                     break
             else:
@@ -771,11 +804,7 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
 
             sfn = os.path.join(i, j)
 
-            dfn = "bin/{}-{}-{}-{}".format(
-                config.package,
-                config.version,
-                config.numeric_version,
-                j[4:])
+            dfn = f"bin/{config.package}-{config.version}-{config.numeric_version}-{j[4:]}"
 
             dfn = plat.path(dfn)
 
@@ -785,35 +814,37 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
     # Install the bundle.
 
     if bundle and install:
-
         iface.info(__("I'm installing the bundle."))
 
         try:
+            iface.call(
+                [
+                    plat.java,
+                    "-jar",
+                    plat.path("bundletool.jar"),
+                    "build-apks",
+                    "--bundle=" + plat.path("project/app/build/outputs/bundle/release/app-release.aab"),
+                    "--output=" + plat.path("project/app/build/outputs/bundle/release/app-release.apks"),
+                    "--local-testing",
+                ]
+                + get_local_key_properties()
+            )
 
-            iface.call([
-                plat.java,
-                "-jar",
-                plat.path("bundletool.jar"),
-                "build-apks",
-                "--bundle=" + plat.path("project/app/build/outputs/bundle/release/app-release.aab"),
-                "--output=" + plat.path("project/app/build/outputs/bundle/release/app-release.apks"),
-                "--local-testing",
-            ] + get_local_key_properties())
-
-            iface.call([
-                plat.java,
-                "-jar",
-                plat.path("bundletool.jar"),
-                "install-apks",
-                "--apks=" + plat.path("project/app/build/outputs/bundle/release/app-release.apks"),
-                "--adb=" + plat.adb,
-            ])
+            iface.call(
+                [
+                    plat.java,
+                    "-jar",
+                    plat.path("bundletool.jar"),
+                    "install-apks",
+                    "--apks=" + plat.path("project/app/build/outputs/bundle/release/app-release.apks"),
+                    "--adb=" + plat.adb,
+                ]
+            )
 
         except subprocess.CalledProcessError:
-
             iface.fail(__("Installing the bundle appears to have failed."))
 
-# Launch.
+    # Launch.
 
     if launch:
         iface.info(__("Launching app."))
@@ -821,25 +852,27 @@ def build(iface, directory, base, install=False, bundle=False, launch=False, fin
         launch_activity = "PythonSDLActivity"
 
         try:
-
-            iface.call([
-                plat.adb, "shell",
-                "am", "start",
-                "-W",
-                "-a", "android.intent.action.MAIN",
-                "{}/org.renpy.android.{}".format(config.package, launch_activity),
-                ], cancel=True)
+            iface.call(
+                [
+                    plat.adb,
+                    "shell",
+                    "am",
+                    "start",
+                    "-W",
+                    "-a",
+                    "android.intent.action.MAIN",
+                    f"{config.package}/org.renpy.android.{launch_activity}",
+                ],
+                cancel=True,
+            )
 
         except subprocess.CalledProcessError:
-
             iface.fail(__("Launching the app appears to have failed."))
 
     if finished is not None:
         finished(files)
 
-    iface.final_success(
-        __("The build seems to have succeeded.")
-        )
+    iface.final_success(__("The build seems to have succeeded."))
 
 
 def distclean(interface):
@@ -868,5 +901,5 @@ def distclean(interface):
 
     try:
         rmdir("Sdk")
-    except:
+    except Exception:
         rm("Sdk")

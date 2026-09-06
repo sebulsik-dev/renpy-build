@@ -1,21 +1,24 @@
 from renpybuild.context import Context
 from renpybuild.task import task, annotator
 
+import tomllib
+import hashlib
+from pathlib import Path
+
 version = "3.12.8"
 win_version = "3.12.7"
 web_version = "3.12.8"
 
+
 @annotator
 def annotate(c: Context):
-    if c.python == "3":
+    c.var("pythonver", "python3.12")
+    c.var("pycver", "312")
 
-        c.var("pythonver", "python3.12")
-        c.var("pycver", "312")
-
-        c.include("{{ install }}/include/{{ pythonver }}")
+    c.include("{{ install }}/include/{{ pythonver }}")
 
 
-@task(kind="python", pythons="3", platforms="linux,mac,android,ios")
+@task(kind="arch", platforms="linux,mac,android,ios")
 def unpack(c: Context):
     c.clean()
 
@@ -23,20 +26,20 @@ def unpack(c: Context):
     c.run("tar xaf {{source}}/Python-{{version}}.tar.xz")
 
 
-@task(kind="python", pythons="3", platforms="windows")
+@task(kind="arch", platforms="windows")
 def unpack_windows(c: Context):
     c.clean()
     c.var("version", win_version)
 
     if (c.root / "unpacked" / "cpython-mingw").exists():
-        c.run("git clone {{ c.root }}/unpacked/cpython-mingw")
+        c.var("repo", "{{ c.root }}/unpacked/cpython-mingw")
     else:
-        c.run("git clone https://github.com/msys2-contrib/cpython-mingw")
+        c.var("repo", "https://github.com/msys2-contrib/cpython-mingw")
 
-    c.chdir("cpython-mingw")
-    c.run("git checkout mingw-v{{ version }}")
+    c.clone("{{ repo }}", "--branch mingw-v{{ version }}")
 
-@task(kind="python", pythons="3", platforms="linux,mac,ios")
+
+@task(kind="arch", platforms="linux,mac,ios")
 def patch_posix(c: Context):
     c.var("version", version)
 
@@ -50,7 +53,7 @@ def patch_posix(c: Context):
     c.run(""" autoreconf -vfi """)
 
 
-@task(kind="python", pythons="3", platforms="ios")
+@task(kind="arch", platforms="ios")
 def patch_ios(c: Context):
     c.var("version", version)
 
@@ -63,7 +66,7 @@ def patch_ios(c: Context):
     c.run("cython _scproxy.pyx")
 
 
-@task(kind="python", pythons="3", platforms="windows")
+@task(kind="arch", platforms="windows")
 def patch_windows(c: Context):
     c.var("version", win_version)
 
@@ -90,7 +93,6 @@ def common(c: Context):
         c.chdir("Python-{{ version }}")
 
     if c.platform != "web":
-
         with open(c.path("config.site"), "w") as f:
             f.write("ac_cv_file__dev_ptmx=no\n")
             f.write("ac_cv_file__dev_ptc=no\n")
@@ -109,12 +111,10 @@ def common_post(c: Context):
     for i in [ "{}.py".format(c.get_sysconfigdata_name()) ]:
         c.var("i", i)
 
-        c.copy(
-            "{{ host }}/lib/{{pythonver}}/{{ i }}",
-            "{{ install }}/lib/{{pythonver}}/{{ i }}")
+        c.copy("{{ host }}/lib/{{pythonver}}/{{ i }}", "{{ install }}/lib/{{pythonver}}/{{ i }}")
 
 
-@task(kind="python", pythons="3", platforms="linux,mac")
+@task(kind="arch", platforms="linux,mac")
 def build_posix(c: Context):
 
     common(c)
@@ -130,7 +130,7 @@ def build_posix(c: Context):
     common_post(c)
 
 
-@task(kind="python", pythons="3", platforms="ios")
+@task(kind="arch", platforms="ios")
 def build_ios(c: Context):
     common(c)
 
@@ -139,7 +139,9 @@ def build_ios(c: Context):
         # f.write("ac_cv_header_langinfo_h=no\n")
         f.write("ac_cv_func_getentropy=no\n")
         f.write("ac_cv_have_long_long_format=yes\n")
-        f.write("ac_cv_func_clock_settime=no")
+        f.write("ac_cv_func_clock_settime=no\n")
+        f.write("ac_cv_func_dup3=no\n")
+        f.write("ac_cv_func_pipe2=no\n")
 
     c.run("""
         {{configure}} {{ cross_config }}
@@ -153,7 +155,7 @@ def build_ios(c: Context):
     common_post(c)
 
 
-@task(kind="python", pythons="3", platforms="android")
+@task(kind="arch", platforms="android")
 def build_android(c: Context):
     common(c)
 
@@ -172,7 +174,7 @@ def build_android(c: Context):
     common_post(c)
 
 
-@task(kind="python", pythons="3", platforms="windows")
+@task(kind="arch", platforms="windows")
 def build_windows(c: Context):
     common(c)
 
@@ -198,7 +200,8 @@ def build_windows(c: Context):
 
     common_post(c)
 
-@task(kind="python", pythons="3", platforms="web")
+
+@task(kind="arch", platforms="web")
 def build_web(c: Context):
 
     c.var("version", web_version)
@@ -231,27 +234,61 @@ def build_web(c: Context):
     for i in [ "ssl.py", "{}.py".format(c.get_sysconfigdata_name()) ]:
         c.var("i", i)
 
-        c.copy(
-            "{{ host }}/lib/{{pythonver}}/{{ i }}",
-            "{{ install }}/lib/{{pythonver}}/{{ i }}")
+        c.copy("{{ host }}/lib/{{pythonver}}/{{ i }}", "{{ install }}/lib/{{pythonver}}/{{ i }}")
 
-@task(kind="python", pythons="3", platforms="all")
+
+def get_uv_lock_versions(lock_path: str | Path) -> dict[str, str]:
+    """
+    Parses a uv.lock file and returns a dictionary mapping package names to versions.
+    """
+    with open(lock_path, "rb") as f:
+        lock_data = tomllib.load(f)
+
+    # uv.lock stores package information in a list of tables named [[package]]
+    packages = lock_data.get("package", [])
+
+    return {pkg["name"]: pkg["version"] for pkg in packages if "name" in pkg and "version" in pkg}
+
+
+@task(kind="arch", platforms="all", always=True)
 def pip(c: Context):
+
+    lock_path = c.path("{{renpy}}/uv.lock")
+
+    with open(lock_path, "rb") as f:
+        lock_hash = hashlib.sha256(f.read()).hexdigest()
+
+    hash_path = c.path("{{ build }}/uv.lock.hash")
+
+    if hash_path.exists():
+        with open(hash_path) as f:
+            if f.read().strip() == lock_hash:
+                return
+
+    package_versions = get_uv_lock_versions(lock_path)
+
+    def v(name):
+        if name not in package_versions:
+            raise RuntimeError(f"Package '{name}' was not found in uv.lock package_versions.")
+
+        return f"{name}=={package_versions[name]}"
+
     c.run("{{ install }}/bin/hostpython3 -s -m ensurepip")
-    c.run("""{{ install }}/bin/hostpython3 -s -m pip install --no-compile --upgrade
-        future==1.0.0
-        six==1.16.0
-        rsa==4.9
-        pyasn1==0.6.1
-        ecdsa==0.19.0
-        urllib3==2.2.2
-        charset-normalizer==3.3.2
-        chardet==5.2.0
+    c.run(f"""{{{{ install }}}}/bin/hostpython3 -s -m pip install --no-compile --upgrade
+        {v("future")}
+        {v("six")}
+        {v("rsa")}
+        {v("pyasn1")}
+        {v("urllib3")}
+        {v("charset-normalizer")}
         certifi
-        idna==3.8
-        requests==2.32.3
-        pefile==2022.5.30
-        websockets==12.0
-        setuptools==74.1.2
-        pysocks==1.7.1
+        {v("idna")}
+        {v("requests")}
+        {v("pefile")}
+        {v("websockets")}
+        {v("setuptools")}
+        {v("pysocks")}
         """)
+
+    with open(hash_path, "w") as f:
+        f.write(lock_hash)

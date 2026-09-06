@@ -16,17 +16,7 @@ def unpack_sdk(c: Context):
     zf.close()
 
 
-@task(kind="host", platforms="all")
-def patch_sdk(c: Context):
-
-    if not c.path("{{host}}/steam/sdk").exists():
-        return
-
-    c.chdir("{{ install }}/steam/sdk")
-    # c.patch("steam-cdecl.diff")
-
-
-@task(kind="python", platforms="linux,windows,mac", always=True)
+@task(kind="arch", platforms="linux,windows,mac", always=True)
 def build(c: Context):
 
     if not c.path("{{host}}/steam/sdk").exists():
@@ -44,6 +34,8 @@ def build(c: Context):
     c.run("cp {{steamdll}} {{dlpa}}")
 
     c.run("install -d {{pytmp}}/steam")
-    c.run("{{ root }}/steamapi/generate.py {{ host }}/steam/sdk/public/steam/steam_api.json {{ pytmp }}/steam/steamapi.py")
+    c.run(
+        "python3 {{ root }}/steamapi/generate.py {{ host }}/steam/sdk/public/steam/steam_api.json {{ pytmp }}/steam/steamapi.py"
+    )
 
     c.run("cp {{ pytmp }}/steam/steamapi.py {{renpy}}/steamapi.py")

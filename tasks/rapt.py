@@ -1,49 +1,78 @@
+import os
+import time
+import zipfile
+
 from renpybuild.context import Context
 from renpybuild.task import task
-import shutil
-import time
-import os
+
+markupsafe_version = "3.0.3"
+jinja_version = "3.1.6"
 
 
-@task(kind="platform-python", platforms="android", always=True)
+@task(kind="host")
+def download(c: Context):
+    c.var("version", markupsafe_version)
+
+    url = "https://github.com/pallets/markupsafe/releases/download/{{ version }}/markupsafe-{{ version }}.tar.gz"
+    dest = c.expand("markupsafe-{{ version }}.tar.gz")
+
+    c.download(url, dest)
+
+    c.var("version", jinja_version)
+
+    url = "https://github.com/pallets/jinja/releases/download/{{ version }}/jinja2-{{ version }}-py3-none-any.whl"
+    dest = c.expand("jinja2-{{ version }}-py3-none-any.whl")
+
+    c.download(url, dest)
+
+
+@task(kind="host")
+def unpack(c: Context):
+    c.var("version", markupsafe_version)
+    c.clean("{{ tmp }}/source/markupsafe-{{ version }}")
+    c.chdir("{{ tmp }}/source")
+    c.run("tar xzf {{ tmp }}/tars/markupsafe-{{ version }}.tar.gz")
+
+    c.var("version", jinja_version)
+    c.clean("{{ tmp }}/source/jinja2-{{ version }}")
+
+    with zipfile.ZipFile(c.path("{{ tmp }}/tars/jinja2-{{ version }}-py3-none-any.whl")) as zf:
+        zf.extractall(c.path("{{ tmp }}/source/jinja2-{{ version }}"))
+
+
+@task(kind="host", always=True)
 def copy(c: Context):
+    c.copytree("{{ root }}/rapt", "{{ rapt }}")
 
-    c.copytree("{{ root }}/rapt", "{{ raptver }}")
+    c.var("version", markupsafe_version)
+    c.copytree("{{ tmp }}/source/markupsafe-{{ version }}/src/markupsafe", "{{ rapt }}/buildlib/markupsafe")
 
-    c.run("mv {{ raptver }}/blocklist{{ python }}.txt {{ raptver }}/blocklist.txt")
-    c.run("mv {{ raptver }}/keeplist{{ python }}.txt {{ raptver }}/keeplist.txt")
+    c.var("version", jinja_version)
+    c.copytree("{{ tmp }}/source/jinja2-{{ version }}/jinja2", "{{ rapt }}/buildlib/jinja2")
 
-
-    if c.python == "3":
-        c.run("rm {{ raptver }}/blocklist2.txt")
-        c.run("rm {{ raptver }}/keeplist2.txt")
-    else:
-        c.run("rm {{ raptver }}/blocklist3.txt")
-        c.run("rm {{ raptver }}/keeplist3.txt")
-
-    with open(c.path("{{ raptver }}/prototype/build.txt"), "w") as f:
+    with open(c.path("{{ rapt }}/prototype/build.txt"), "w") as f:
         f.write(time.ctime())
 
-    c.rmtree("{{ raptver }}/prototype/renpyandroid/src/main/java/org/libsdl")
-    c.rmtree("{{ raptver }}/prototype/renpyandroid/src/main/java/org/jnius")
+    c.rmtree("{{ rapt }}/prototype/renpyandroid/src/main/java/org/libsdl")
+    c.rmtree("{{ rapt }}/prototype/renpyandroid/src/main/java/org/jnius")
 
-    os.unlink(c.path("{{ raptver }}/prototype/renpyandroid/src/main/java/org/renpy/android/Constants.java"))
+    os.unlink(c.path("{{ rapt }}/prototype/renpyandroid/src/main/java/org/renpy/android/Constants.java"))
 
-    if c.path("{{ raptver }}/prototype/local.properties").exists():
-        os.unlink(c.path("{{ raptver }}/prototype/local.properties"))
+    if c.path("{{ rapt }}/prototype/local.properties").exists():
+        os.unlink(c.path("{{ rapt }}/prototype/local.properties"))
 
-    c.rmtree("{{ raptver }}/prototype/app/src/main/res/mipmap-mdpi")
-    c.rmtree("{{ raptver }}/prototype/app/src/main/res/mipmap-hdpi")
-    c.rmtree("{{ raptver }}/prototype/app/src/main/res/mipmap-xhdpi")
-    c.rmtree("{{ raptver }}/prototype/app/src/main/res/mipmap-xxhdpi")
-    c.rmtree("{{ raptver }}/prototype/app/src/main/res/mipmap-xxxhdpi")
+    c.rmtree("{{ rapt }}/prototype/app/src/main/res/mipmap-mdpi")
+    c.rmtree("{{ rapt }}/prototype/app/src/main/res/mipmap-hdpi")
+    c.rmtree("{{ rapt }}/prototype/app/src/main/res/mipmap-xhdpi")
+    c.rmtree("{{ rapt }}/prototype/app/src/main/res/mipmap-xxhdpi")
+    c.rmtree("{{ rapt }}/prototype/app/src/main/res/mipmap-xxxhdpi")
 
-    c.rmtree("{{ raptver }}/prototype/renpyandroid/build/")
-    c.rmtree("{{ raptver }}/prototype/app/build/")
+    c.rmtree("{{ rapt }}/prototype/renpyandroid/build/")
+    c.rmtree("{{ rapt }}/prototype/app/build/")
 
 
-@task(kind="host-python", always=True)
+@task(kind="platform", always=True)
 def android_module(c: Context):
     c.run("""install -d {{ install }}/lib/{{ pythonver }}/site-packages/android""")
-    c.run("""install {{ runtime }}/android/__init__.py {{ install }}/lib/{{ pythonver }}/site-packages/android""")
-    c.run("""install {{ runtime }}/android/apk.py {{ install }}/lib/{{ pythonver }}/site-packages/android""")
+    c.run("""install {{ renpy }}/runtime/android/__init__.py {{ install }}/lib/{{ pythonver }}/site-packages/android""")
+    c.run("""install {{ renpy }}/runtime/android/apk.py {{ install }}/lib/{{ pythonver }}/site-packages/android""")

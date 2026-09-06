@@ -3,11 +3,9 @@ import sys
 import shutil
 from pathlib import Path
 import subprocess
-import shutil
 
 import jinja2
-
-import renpybuild.run
+import requests
 
 from typing import Any
 
@@ -15,12 +13,14 @@ from typing import Any
 # Monkeypatch copytree to fix a problem with ignore_dangling_symlinks.
 old_copytree = shutil.copytree
 
+
 def copytree(*args, **kwargs):
     if len(args) < 6:
         # ignore_dangling_symlinks is not passed by pos
         kwargs.setdefault("ignore_dangling_symlinks", True)
 
     return old_copytree(*args, **kwargs)
+
 
 shutil.copytree = copytree
 
@@ -34,75 +34,70 @@ class Context:
     """
 
     # The platform. One of "linux", "windows", "mac", "android", "ios", or "web".
-    platform : str
+    platform: str
 
     # The architecture. Varies based on the platform.
-    arch : str
-
-    # The version of Python, one of "2" or "3"
-    python : str
+    arch: str
 
     # The root directory of the build.
-    root : Path
+    root: Path
 
     # The arguments passed to the build by argparse.
-    args : Any
+    args: Any
 
     # Maps containing the environment and non-environment variables. Environment
     # variables are passed to subprocesses, while non-environment variables are
     # only used for expansion.
-    environ : dict[str, str]
-    variables : dict[str, str]
+    environ: dict[str, str]
+    variables: dict[str, str]
 
     # The local temporary directory.
-    tmp : Path
+    tmp: Path
 
     # The kind of task.
-    kind : str
+    kind: str
 
     # The name of the function that the task is defined in.
-    task : str
+    task: str
 
     # The name of the module that the task is defined in.
-    name : str
+    name: str
 
     # A unique name for this the task being executed.
-    task_name : str
+    task_name: str
 
     # The name of the directory the task will run in.
-    dir_name : str
+    dir_name: str
 
     # The path to the directory builds will be placed in.
-    build : Path
+    build: Path
 
     # The current directory the task will run in.
-    cwd : Path
+    cwd: Path
 
     # The place to install to.
-    install : Path
+    install: Path
 
     # More paths.
     renpy: Path
 
-    def __init__(self, platform : str, arch : str, python : str, root : Path, args : Any):
+    def __init__(self, platform: str, arch: str, root: Path, args: Any):
 
         self.platform = platform
         self.arch = arch
-        self.python = python
         self.root = root
         self.args = args
 
         self.environ = dict(os.environ)
-        self.variables = { }
+        self.variables = {}
 
         # The local temporary directory.
-        self.tmp = self.root / "tmp"
+        self.tmp = self.root / os.environ.get("RENPY_BUILD_TMP", "tmp")
 
         self.var("tmp", self.tmp)
 
         self.var("platform", platform)
         self.var("arch", arch)
-        self.var("python", python)
         self.var("root", root)
 
         # Paths relative to root.
@@ -113,33 +108,27 @@ class Context:
         self.var("prebuilt", self.root / "prebuilt")
 
         # Paths to subprojects.
-        self.pygame_sdl2 = self.root / "pygame_sdl2"
-        self.var("pygame_sdl2", self.pygame_sdl2)
-
         self.renpy = self.root / "renpy"
         self.var("renpy", self.renpy)
 
         self.var("rapt", "{{ renpy }}/rapt")
-        self.var("raptver", "{{ rapt }}" + self.python)
 
-        #
         if "arm" in self.arch:
             jni_arch = self.arch.replace("_", "-")
         else:
             jni_arch = self.arch
 
         self.var("jni_arch", jni_arch)
-        self.var("jniLibs", "{{ raptver }}/prototype/renpyandroid/src/main/jniLibs/{{ jni_arch }}")
+        self.var("jniLibs", "{{ rapt }}/prototype/renpyandroid/src/main/jniLibs/{{ jni_arch }}")
 
-        self.var("jni_unstripped", "{{ raptver }}/symbols/{{ jni_arch }}")
+        self.var("jni_unstripped", "{{ rapt }}/symbols/{{ jni_arch }}")
 
-        self.var("renios", "{{ renpy }}/renios" + self.python)
+        self.var("renios", "{{ renpy }}/renios")
 
-        # Python version specific storage.
-        self.var("pytmp", self.tmp / ("py" + python))
+        # Python specific storage.
+        self.var("pytmp", self.tmp / "py")
 
-
-    def set_names(self, kind : str, task : str, name : str):
+    def set_names(self, kind: str, task: str, name: str):
         """
         This is used to past the task-specific names into the context.
         """
@@ -164,31 +153,16 @@ class Context:
         # The path to the cross compiler.
         self.var("cross", cross)
 
-        per_python = False
-
         if kind == "host":
             self.dir_name = f"{self.name}.host"
-        elif kind == "host-python":
-            self.dir_name = f"{self.name}.py{self.python}"
         elif kind == "cross":
             self.dir_name = f"{self.name}.cross-{self.platform}-{self.arch}"
         elif kind == "platform":
             self.dir_name = f"{self.name}.{self.platform}"
-        elif kind == "platform-python":
-            self.dir_name = f"{self.name}.{self.platform}"
-            per_python = True
         elif kind == "arch":
             self.dir_name = f"{self.name}.{self.platform}-{self.arch}"
-        elif kind == "arch-python":
-            self.dir_name = f"{self.name}.{self.platform}-{self.arch}"
-            per_python = True
-        elif kind == "python":
-            self.dir_name = f"{self.name}.{self.platform}-{self.arch}-py{self.python}"
 
         self.task_name = f"{self.task}-{self.dir_name}"
-
-        if per_python:
-            self.task_name += "-py" + self.python
 
         build = self.tmp / "build" / self.dir_name
         build.mkdir(parents=True, exist_ok=True)
@@ -211,11 +185,8 @@ class Context:
         self.install = install
         self.var("install", install)
 
-        # The install for linux-x86_64, used to find file from any python isntall.
-        self.var("linuxinstall", self.tmp / "install.linux-x86_64")
-
-        # The path to a version of Python comp
-        self.var("hostpython", "{{ install }}/bin/hostpython{{ c.python }}")
+        # The path to a version of Python compiled for the host.
+        self.var("hostpython", "{{tmp}}/install.{{platform}}-{{arch}}/bin/hostpython3")
 
         # Final installation paths.
         if self.platform == "web":
@@ -227,28 +198,30 @@ class Context:
 
         # renpy/lib/py3-linux-x86_64 and friends. ({{dist}}/lib/py-platform-arch)
         if self.platform == "mac":
-            self.var("dlpa", "{{distlib}}/py{{ python }}-{{ platform }}-universal")
+            self.var("dlpa", "{{distlib}}/py3-mac-universal")
         else:
-            self.var("dlpa", "{{distlib}}/py{{ python }}-{{ platform }}-{{ arch }}")
+            self.var("dlpa", "{{distlib}}/py3-{{ platform }}-{{ arch }}")
 
-        renpybuild.run.build_environment(self)
+        from .run import build_environment
 
-    def expand(self, s : str, **kwargs) -> str:
+        build_environment(self)
+
+    def expand(self, s: str, **kwargs) -> str:
         """
         Expands `s` as a jinja template.
         """
 
         template = jinja2.Template(s)
 
-        variables = dict()
+        variables = {}
         variables.update(self.environ)
         variables.update(self.variables)
-        variables.update({ "c" : self })
+        variables.update({"c": self})
         variables.update(kwargs)
 
         return template.render(**variables)
 
-    def generate(self, src : str, dest : str, **kwargs):
+    def generate(self, src: str, dest: str, **kwargs):
         """
         Loads in `src`, a template file, substitutes in ``kwargs`` and all
         the other variables that are defined, and writes it out into ``dest``.
@@ -275,15 +248,14 @@ class Context:
 
         self.path(dest).write_text(text)
 
-
-    def env(self, variable : str, value : str|Path):
+    def env(self, variable: str, value: str | Path):
         """
         Adds environment variable `variable` with `value`.
         """
 
         self.environ[variable] = self.expand(str(value))
 
-    def var(self, variable : str, value : str|Path, expand=True):
+    def var(self, variable: str, value: str | Path, expand=True):
         """
         Adds a non-environment `variable` with `value`.
         """
@@ -293,7 +265,7 @@ class Context:
         else:
             self.variables[variable] = str(value)
 
-    def get(self, variable : str) -> str:
+    def get(self, variable: str) -> str:
         """
         Returns the value of `variable`.
         """
@@ -303,14 +275,14 @@ class Context:
 
         raise Exception(f"Unknown variable {variable!r}.")
 
-    def chdir(self, d : str):
+    def chdir(self, d: str):
         """
         Changes the directory to `d`.
         """
 
         self.cwd = self.cwd / self.expand(d)
 
-    def run(self, command : str, verbose : bool=False, quiet : bool=False, **kwargs):
+    def run(self, command: str, verbose: bool = False, quiet: bool = False, **kwargs):
         """
         Runs `command`, and checks that the result is 0.
 
@@ -324,7 +296,10 @@ class Context:
         """
 
         command = self.expand(command, **kwargs)
-        renpybuild.run.run(command, self, verbose, quiet)
+
+        from .run import run
+
+        run(command, self, verbose, quiet)
 
     def run_group(self):
         """
@@ -332,9 +307,11 @@ class Context:
         that allows multiple commands to be run in parallel.
         """
 
-        return renpybuild.run.RunGroup(self)
+        from .run import RunGroup
 
-    def clean(self, d : str="{{build}}"):
+        return RunGroup(self)
+
+    def clean(self, d: str = "{{build}}"):
         """
         Empties the named directory.
         """
@@ -349,14 +326,14 @@ class Context:
 
         p.mkdir(exist_ok=True, parents=True)
 
-    def path(self, p : str) -> Path:
+    def path(self, p: str) -> Path:
         """
         Returns a path object for `p`.
         """
 
         return self.cwd / self.expand(p)
 
-    def patch(self, fn : str, p : int=1):
+    def patch(self, fn: str, p: int = 1):
         """
         Applies the patch in `fn`.
 
@@ -369,9 +346,9 @@ class Context:
         with open(fpath, "rb") as f:
             patch = f.read()
 
-        subprocess.run([ "patch", "-p%d" % p ], input=patch, cwd=self.cwd, check=True)
+        subprocess.run(["patch", f"-p{p}"], input=patch, cwd=self.cwd, check=True)
 
-    def patchdir(self, dn : str):
+    def patchdir(self, dn: str):
         """
         Applies all the patches in `dn`.
         """
@@ -382,22 +359,21 @@ class Context:
         patches.sort()
 
         for fn in patches:
-
             print("Applying", fn.name)
 
             with open(fn, "rb") as f:
                 patch = f.read()
 
-            subprocess.run([ "patch", "-p1" ], input=patch, cwd=self.cwd, check=True)
+            subprocess.run(["patch", "-p1"], input=patch, cwd=self.cwd, check=True)
 
-    def copy(self, src : str, dst : str):
+    def copy(self, src: str, dst: str):
         """
         Copies `src` to `dst`.
         """
 
         shutil.copy(self.path(src), self.path(dst))
 
-    def include(self, path : str):
+    def include(self, path: str):
         """
         Adds an include to the C compiler include path.
         """
@@ -412,7 +388,7 @@ class Context:
             self.env("CFLAGS", "{{ CFLAGS }} -I" + path)
             self.env("CXXFLAGS", "{{ CXXFLAGS }} -I" + path)
 
-    def copytree(self, src : str, dst : str):
+    def copytree(self, src: str, dst: str):
         """
         Copies the directory `src` to `dst`. If `dst` exists, it is removed.
         """
@@ -427,7 +403,7 @@ class Context:
 
         shutil.copytree(srcpath, dstpath)
 
-    def rmtree(self, d : str):
+    def rmtree(self, d: str):
         """
         Removes the directory `d`.
         """
@@ -439,7 +415,7 @@ class Context:
         elif dpath.exists():
             shutil.rmtree(dpath)
 
-    def unlink(self, fn : str):
+    def unlink(self, fn: str):
         """
         Removes the file `fn`.
         """
@@ -448,7 +424,7 @@ class Context:
         if fnpath.exists():
             fnpath.unlink()
 
-    def symlink(self, src : str, dst : str):
+    def symlink(self, src: str, dst: str):
         """
         Creates a symlink from `src` to `dst`.
         """
@@ -458,7 +434,7 @@ class Context:
 
         dstpath.symlink_to(srcpath)
 
-    def compile(self, src : str|Path):
+    def compile(self, src: str | Path):
         """
         Compiles py files to pyc files, and elides the build path.
         """
@@ -466,16 +442,11 @@ class Context:
         src = self.expand(str(src))
         dst = self.expand("lib/{{ pythonver }}")
 
-        if self.python == "2":
-            command = "{{ hostpython }} -OO -m compileall {{ flags }} {{ src }}"
-            flags = f"-d {dst} -fq"
+        command = "{{ hostpython }} -m compileall {{ flags }} {{ src }}"
+        flags = f"-d {dst} -fq --invalidation-mode unchecked-hash"
 
-        else:
-            command = "{{ hostpython }} -m compileall {{ flags }} {{ src }}"
-            flags = f"-d {dst} -fq --invalidation-mode unchecked-hash"
-
-            if src.endswith(".py"):
-                flags = f'-b {flags}'
+        if src.endswith(".py"):
+            flags = f"-b {flags}"
 
         self.run(command, flags=flags, src=src)
 
@@ -486,3 +457,66 @@ class Context:
             platform=sys.platform,
             multiarch=getattr(sys.implementation, '_multiarch', ''),
         ))
+    def download(self, url: str, fn: str):
+        """
+        Downloads `url` to tmp/tars/`fn`.
+        """
+
+        url = self.expand(url)
+        fn = self.expand(fn)
+
+        dest = self.path("{{ tmp }}/tars") / fn
+
+        if os.path.exists(dest):
+            return
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(dest.with_suffix(".tmp"), "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    f.write(chunk)
+
+        dest.with_suffix(".tmp").rename(dest)
+
+    def clone(
+        self,
+        url: str,
+        options: str = "",
+        *,
+        directory: str = "",
+        minimal: bool = True,
+        submodules: bool = False,
+    ):
+        """
+        Clones the repository at `url` into the current directory.
+
+        `options`
+            Options to pass to git clone.
+
+        `directory`
+            The directory to clone into.
+
+        `minimal`
+            If true, automatically applies options to minimize download size.
+
+        `submodules`
+            If true, also clones submodules recursively.
+        """
+
+        url = self.expand(url)
+        options = self.expand(options)
+        directory = self.expand(directory)
+
+        if minimal:
+            options = f"--depth 1 --no-tags --single-branch --shallow-submodules {options}"
+
+        if submodules:
+            options = f"--recurse-submodules {options}"
+
+        # In devcontainer on Windows VS Code uses CRLF endings and this breaks
+        # a lot of Linux assumptions.
+        options = f"{options} --config core.autocrlf=false --config core.eol=lf"
+
+        self.run(f"git clone {options} {url} {directory}")

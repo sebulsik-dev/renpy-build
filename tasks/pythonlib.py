@@ -2,9 +2,7 @@ from renpybuild.context import Context
 from renpybuild.task import task
 
 import shutil
-import os
 import re
-
 
 
 PY3_MODULES = """
@@ -175,8 +173,7 @@ socks
 
 android/
 certifi/
-chardet/
-ecdsa/
+charset_normalizer/
 future/
 idna/
 past/
@@ -201,10 +198,12 @@ pefile
 ordlookup/
 
 steamapi
+
+brotli
 """
 
 
-@task(kind="host-python", pythons="3", always=True)
+@task(kind="platform", platforms="all", always=True)
 def python3(c: Context):
     # Remove stdlib packages which include non-compilable code.
     c.rmtree("{{ install }}/lib/{{ pythonver }}/test")
@@ -220,7 +219,8 @@ def python3(c: Context):
         c.path("{{ pytmp }}/pyjnius"),
         c.path("{{ pytmp }}/pyobjus"),
         c.path("{{ pytmp }}/steam"),
-        ]
+        c.path("{{ source }}/brotli"),
+    ]
 
     dist = c.path("{{ distlib }}/{{ pythonver }}")
     c.clean("{{ distlib }}/{{ pythonver }}")
@@ -229,15 +229,13 @@ def python3(c: Context):
         c.compile(base)
 
         for fn in base.glob(c.expand("**/*.cpython-{{ pycver }}.pyc")):
-
             short = str(fn.relative_to(base))
             short = short.replace("__pycache__/", "")
-            short = re.sub(r'\.cpython-.*.pyc$', '', short)
+            short = re.sub(r"\.cpython-.*.pyc$", "", short)
 
             matched = False
 
             for i in rules:
-
                 if i[-1] == "/":
                     if short.startswith(i):
                         used_rules.add(i)
@@ -252,15 +250,17 @@ def python3(c: Context):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(fn, dest)
 
-    # used_rules.add("steamapi")
+    if not c.path("{{host}}/steam/sdk").exists():
+        used_rules.add("steamapi")
 
     if rules - used_rules:
         if c.platform != "web":
             raise Exception(f"Unused rules: {rules - used_rules}")
 
-    c.copy("{{ runtime }}/site3.py", "{{ distlib }}/{{ pythonver }}/sitecustomize.py")
+    c.copy("{{ runtime }}/sitecustomize.py", "{{ distlib }}/{{ pythonver }}/sitecustomize.py")
 
     import socket
+
     with open(c.path("{{ distlib }}/{{ pythonver }}/sitecustomize.py"), "a") as f:
         f.write("\n")
         f.write("import site\n")
@@ -278,13 +278,6 @@ def python3(c: Context):
     with open(c.path("{{ distlib }}/{{ pythonver }}/lib-dynload/empty.txt"), "w") as f:
         f.write("lib-dynload needs to exist to stop an exec_prefix error.\n")
 
-    c.run("cp {{ install }}/lib/{{ pythonver }}/site-packages/certifi/cacert.pem {{ distlib }}/{{ pythonver }}/certifi/cacert.pem")
-
-
-@task(kind="python", platforms="web", pythons="3", always=True)
-def python3_web(c: Context):
-    """
-    This should do the same work as Python 3, but for the web version of Python.
-    """
-
-    python3(c)
+    c.run(
+        "cp {{ install }}/lib/{{ pythonver }}/site-packages/certifi/cacert.pem {{ distlib }}/{{ pythonver }}/certifi/cacert.pem"
+    )

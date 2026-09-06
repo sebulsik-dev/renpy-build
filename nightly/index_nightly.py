@@ -3,7 +3,6 @@
 import datetime
 import os.path
 import argparse
-import re
 import json
 from collections import namedtuple, defaultdict
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -11,26 +10,35 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 env = Environment(
     loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), "templates")),
-    autoescape=select_autoescape(['html', 'xml']),
+    autoescape=select_autoescape(["html", "xml"]),
 )
 
-gh = 'https://github.com/renpy'
-src = namedtuple('Source', 'text url')
+gh = "https://github.com/renpy"
+src = namedtuple("Source", "text url")
 
 
 def directory(name, full):
 
-    sdk = [ ]
-    other = [ ]
-    vcs = [ ]
+    sdk = []
+    other = []
+    vcs = []
 
     dirtime = 0
 
     branch = "master"
 
     for i in os.listdir(full):
-
-        if i in [ ".build_cache", "updates.json", "updates.ecdsa", "updates.json.sig", "index.html", "date.txt", "timestamp.txt", "doc", "rpu" ]:
+        if i in [
+            ".build_cache",
+            "updates.json",
+            "updates.ecdsa",
+            "updates.json.sig",
+            "index.html",
+            "date.txt",
+            "timestamp.txt",
+            "doc",
+            "rpu",
+        ]:
             continue
 
         if i.endswith(".update.gz"):
@@ -47,8 +55,7 @@ def directory(name, full):
 
         if i == "vcs.json":
             with open(os.path.join(full, i)) as f:
-                vcs = [ src(f'{repo}@{rev}', f'{gh}/{repo}/commits/{sha}')
-                        for repo, sha, rev in json.load(f) ]
+                vcs = [src(f"{repo}@{rev}", f"{gh}/{repo}/commits/{sha}") for repo, sha, rev in json.load(f)]
             continue
 
         if i == "branch.txt":
@@ -60,13 +67,13 @@ def directory(name, full):
         dirtime = max(dirtime, mtime)
 
         dt = datetime.datetime.fromtimestamp(mtime)
-        date = dt.strftime("%A, %B %d, %H:%M" )
+        date = dt.strftime("%A, %B %d, %H:%M")
 
         record = (
             i,
             round(os.path.getsize(os.path.join(full, i)) / 1024.0 / 1024, 1),
             date,
-            )
+        )
 
         if "-sdk." in i:
             sdk.append(record)
@@ -105,6 +112,7 @@ def sort_key(name):
 
     return tuple(int(i) for i in name.split("."))
 
+
 def main():
 
     ap = argparse.ArgumentParser()
@@ -115,7 +123,7 @@ def main():
     dates = set()
 
     for i in os.listdir(args.nightly):
-        if i[0] in "78":
+        if i[0] in "8":
             full = os.path.join(args.nightly, i)
 
             dt = directory(i, full)
@@ -142,11 +150,10 @@ def main():
             dates.add(date)
             dirs[date, python, branch].append((name, i))
 
-
     dates = list(dates)
     dates.sort(reverse=True)
 
-    rows = [ ]
+    rows = []
 
     def col(date, python, branch):
         l = dirs[date, python, branch]
@@ -154,16 +161,17 @@ def main():
         return l
 
     for d in dates:
-
-        date = d.strftime("%A, %B %d, %Y" )
+        date = d.strftime("%A, %B %d, %Y")
 
         rows.append(
-            (date, [
-                col(d, 8, "main"),
-                col(d, 8, "fix"),
-                col(d, 7, "main"),
-                col(d, 7, "fix"),
-            ]))
+            (
+                date,
+                [
+                    col(d, 8, "main"),
+                    col(d, 8, "fix"),
+                ],
+            )
+        )
 
     tmpl = env.get_template("root.html")
     html = tmpl.render(rows=rows)

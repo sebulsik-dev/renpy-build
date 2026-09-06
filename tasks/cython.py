@@ -3,7 +3,7 @@ from renpybuild.task import task
 import sys
 
 
-@task(kind="host-python", always=True)
+@task(kind="host", always=True)
 def check(c: Context):
     """
     Check that cython works.
@@ -14,6 +14,6 @@ def check(c: Context):
 
     try:
         c.run("""cython test.pyx""")
-    except:
-        print("", file=sys.stderr)
+    except Exception:
+        print(file=sys.stderr)
         raise SystemExit("Cython could not be run.")

@@ -105,4 +105,15 @@ public class Store implements StoreInterface {
         return false;
     }
 
+    public void addConsumableSKU(String sku) {
+        skus.add(sku);
+    }
+
+    public void consumePurchase(String sku) {
+        return;
+    }
+
+    public boolean getConsumePurchaseResult() {
+        return false;
+    }
 }

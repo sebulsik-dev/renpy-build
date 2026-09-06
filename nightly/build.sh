@@ -13,7 +13,7 @@ fi
 
 # Build the dependencies.
 pushd $BASE
-./build.py --python 3
+python -m renpybuild
 popd
 
 
@@ -29,10 +29,6 @@ weblink() {
 }
 
 pushd $BASE/renpy
-
-rm -f rapt renios
-ln -s rapt3 rapt
-ln -s renios3 renios
 
 # Update the README.
 cp /home/tom/ab/renpy-deps/scripts/README.nightly /home/tom/ab/WWW.nightly/README.txt
@@ -50,7 +46,7 @@ export RENPY_CYTHON=cython
 export RENPY_DEPS_INSTALL=/usr::/usr/lib/x86_64-linux-gnu/
 export RENPY_SIMPLE_EXCEPTIONS=1
 
-./renpy3.sh tutorial quit
+./renpy.sh tutorial quit
 
 # Build the documentation.
 pushd $BASE/renpy/sphinx

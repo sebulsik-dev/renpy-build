@@ -1,5 +1,5 @@
 plugins {
-    id 'com.android.application'
+    id "com.android.application"
 }
 
 {% if bundle %}
@@ -12,42 +12,55 @@ def localProperties = new Properties()
 localProperties.load(new FileInputStream(localPropertiesFile))
 
 android {
-    compileSdkVersion 35
+    compileSdkVersion = "android-36"
 
-    namespace "{{ config.package }}"
+    namespace = "{{ config.package }}"
 
     defaultConfig {
-        applicationId "{{ config.package }}"
-        minSdkVersion 21
-        targetSdkVersion 35
-        versionCode {{ config.numeric_version }}
-        versionName "{{ config.version }}"
+        applicationId = "{{ config.package }}"
+        minSdkVersion = 23
+        targetSdkVersion = 36
+        versionCode = {{ config.numeric_version }}
+        versionName = "{{ config.version }}"
     }
 
     signingConfigs {
         release {
-            storeFile file(localProperties["key.store"])
-            storePassword localProperties["key.store.password"]
-            keyAlias localProperties['key.alias']
-            keyPassword localProperties["key.alias.password"]
+            storeFile = file(localProperties["key.store"])
+            storePassword = localProperties["key.store.password"]
+            keyAlias = localProperties["key.alias"]
+            keyPassword = localProperties["key.alias.password"]
+            v1SigningEnabled true
+            v2SigningEnabled true
+            enableV3Signing true
+            enableV4Signing true
+        }
+
+        debug {
+            v1SigningEnabled true
+            v2SigningEnabled true
+            enableV3Signing true
+            enableV4Signing true
         }
     }
 
     buildTypes {
         debug {
-            minifyEnabled false
+            minifyEnabled = false
             packaging {
                 jniLibs {
+                    useLegacyPackaging = true
                     keepDebugSymbols = [ "**/*.so" ]
                 }
             }
         }
 
         release {
-            signingConfig signingConfigs.release
-            minifyEnabled false
+            signingConfig =signingConfigs.release
+            minifyEnabled = false
             packaging {
                 jniLibs {
+                    useLegacyPackaging = true
                     keepDebugSymbols = [ "**/*.so" ]
                 }
             }
@@ -59,13 +72,13 @@ android {
 {% endif %}
 
     androidResources {
-        noCompress = [ 'ogv', 'avi', 'mpg', 'webm', 'mkv', 'mp4', 'mp3', 'mp2', 'ogg', 'opus', 'flac', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'rpyc', 'rpymc', 'rpyb', ]
+        noCompress = [ "ogv", "avi", "mpg", "webm", "mkv", "mp4", "mp3", "mp2", "ogg", "opus", "flac", "png", "jpg", "jpeg", "webp", "avif", "rpyc", "rpymc", "rpyb", ]
     }
 }
 
 dependencies {
-    implementation project(':renpyandroid')
+    implementation project(":renpyandroid")
 {% if config.store != "none" %}
-    implementation project(':renpyiap')
+    implementation project(":renpyiap")
 {% endif %}
 }

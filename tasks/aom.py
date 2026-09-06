@@ -1,25 +1,17 @@
 from renpybuild.context import Context
 from renpybuild.task import task
 
+
 @task(kind="host", platforms="all")
-def download(c : Context):
-
-    if c.path("{{ tmp }}/source/aom").exists():
-        c.chdir("{{ tmp }}/source/aom")
-        c.run("git checkout master")
-        c.run("git pull")
-        c.run("git checkout v3.5.0")
-        return
-
+def download(c: Context):
     c.clean("{{ tmp }}/source/aom")
     c.chdir("{{ tmp }}/source")
 
-    c.run("git clone https://aomedia.googlesource.com/aom")
-    c.chdir("{{ tmp }}/source/aom")
-    c.run("git checkout v3.5.0")
+    c.clone("https://aomedia.googlesource.com/aom", "--branch v3.5.0")
+
 
 @task(platforms="all")
-def build(c : Context):
+def build(c: Context):
     c.clean()
 
     c.run("""
@@ -36,12 +28,15 @@ def build(c : Context):
         {% if platform == "web" %}
         -DAOM_TARGET_CPU=generic
         {% endif %}
+        {% if platform == "ios" and c.arch == "sim-x86_64" %}
+        -DAOM_TARGET_CPU=generic
+        {% endif %}
         {{ tmp }}/source/aom
         """)
 
     try:
         c.run("cmake --build .")
-    except:
+    except Exception:
         c.run("cmake --build . -j 1 -v")
 
     c.run("cmake --install .")

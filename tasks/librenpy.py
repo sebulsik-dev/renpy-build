@@ -1,60 +1,46 @@
 from renpybuild.context import Context
 from renpybuild.task import task
 
+from pathlib import Path
 
-@task(kind="python")
+@task(kind="arch", platforms="all")
 def clean(c: Context):
     c.clean()
 
 
-
-@task(kind="host-python", platforms="all", pythons="3", always=True)
-def gen_static3(c: Context):
+@task(kind="host", platforms="all", always=True)
+def gen_static(c: Context):
 
     c.chdir("{{ renpy }}")
     c.env("RENPY_DEPS_INSTALL", "/usr::/usr/lib/x86_64-linux-gnu/")
-    c.env("RENPY_STATIC", "1")
     c.env("RENPY_REGENERATE_CYTHON", "1")
-    c.run("{{ hostpython }} setup.py generate")
+    c.run("uv --project renpy run setup.py generate")
 
 
-@task(kind="python", platforms="all", always=True)
+@task(kind="arch", platforms="all", always=True)
 def build(c: Context):
 
-    if c.platform == "web" and c.python == "2":
-        return
+    c.env("CFLAGS", """{{ CFLAGS }} -I{{ renpy }}/src -I{{ renpy }}/tmp/gen """)
+    c.env("CXXFLAGS", """{{ CXXFLAGS }} -I{{ renpy }}/src -I{{ renpy }}/tmp/gen """)
 
-    c.env("CFLAGS", """{{ CFLAGS }} "-I{{ renpy }}/src" "-I{{renpy}}/tmp/gen3" """)
-    c.env("CXXFLAGS", """{{ CXXFLAGS }} "-I{{ renpy }}/src" "-I{{renpy}}/tmp/gen3" """)
-
-    gen = "gen3-static/"
-
-    modules = [ ]
-    sources = [ ]
+    modules: list[str] = []
+    source_to_module: dict[Path, str] = {}
 
     def read_setup(dn, suffix=""):
-
         with open(dn / ("Setup" + suffix)) as f:
-            for l in f:
-                l = l.partition("#")[0]
-                l = l.strip()
-
-                if not l:
+            for line in f:
+                line = line.partition("#")[0].strip()
+                if not line:
                     continue
 
-                parts = l.split()
+                parts = line.split()
+                module_name, *sources = parts
+                modules.append(module_name)
 
-                if parts[0] == "renpy.compat.dictviews" and c.python != "2":
-                    continue
+                for p in sources:
+                    source_to_module[dn / p] = module_name
 
-                modules.append(parts[0])
-
-                for i in parts[1:]:
-                    if "libhydrogen" not in i:
-                        i = i.replace("gen/", gen)
-                    sources.append(dn / i)
-
-    read_setup(c.renpy / "src" )
+    read_setup(c.renpy / "src")
     read_setup(c.root / "extensions")
 
     if c.platform == "android":
@@ -66,36 +52,45 @@ def build(c: Context):
     if c.platform == "windows" or c.platform == "mac" or c.platform == "linux":
         read_setup(c.renpy / "src", ".tfd")
 
-    if c.platform == "web" and c.python == "3":
+    if c.platform == "web":
         read_setup(c.path("{{ install }}/emscripten_pyx"))
 
-    objects = [ ]
+    read_setup(c.path("{{ source }}/brotli"))
+
+    objects: list[str] = []
 
     with c.run_group() as g:
+        for source, module_name in source_to_module.items():
+            name = source.stem
+            ext = source.suffix[1:]
 
-        for source in sources:
+            object = f"{name}.o"
+            if object in objects:
+                continue
 
-            name, _, ext = str(source.name).rpartition(".")
-
-            object = name + ".o"
             objects.append(object)
 
             c.var("src", source)
             c.var("object", object)
 
-            if ext == "c":
-                g.run("{{ CC }} {{ CFLAGS }} -c {{ src }} -o {{ object }}")
-            else:
-                g.run("{{ CXX }} {{ CXXFLAGS }} -c {{ src }} -o {{ object }}")
+            mangled = module_name.replace(".", "_")
+            short = module_name.rpartition(".")[-1]
+            c.var("pyinit_define", f"-DPyInit_{short}=PyInit_{mangled}")
 
-        c.generate("{{ runtime }}/librenpy_inittab{{ c.python }}.c", "inittab.c", modules=modules)
+            if ext == "c":
+                g.run("{{ CC }} {{ CFLAGS }} {{ pyinit_define }} -c {{ src }} -o {{ object }}")
+            else:
+                g.run("{{ CXX }} {{ CXXFLAGS }} {{ pyinit_define }} -c {{ src }} -o {{ object }}")
+
+        c.generate("{{ runtime }}/librenpy_inittab.c", "inittab.c", modules=modules)
         g.run("{{ CC }} {{ CFLAGS }} -c inittab.c -o inittab.o")
         objects.append("inittab.o")
 
     c.var("objects", " ".join(objects))
 
-    c.unlink("librenpy.a")
-    c.run("{{ AR }} r librenpy.a {{ objects }} inittab.o")
-    c.run("{{ RANLIB }} librenpy.a")
+    if c.platform in ("mac", "ios"):
+        c.run("{{ AR }} --format=darwin crs librenpy.a {{ objects }}")
+    else:
+        c.run("{{ AR }} crs librenpy.a {{ objects }}")
 
     c.copy("librenpy.a", "{{ install }}/lib/librenpy.a")

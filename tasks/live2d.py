@@ -12,8 +12,8 @@ def annotate(c: Context):
 def build(c: Context):
     c.clean()
 
-    c.var("cubism_zip", "CubismSdkForNative-4-r.6.2.zip")
-    c.var("cubism_dir", "CubismSdkForNative-4-r.6.2")
+    c.var("cubism_zip", "CubismSdkForNative-5-r.5.zip")
+    c.var("cubism_dir", "CubismSdkForNative-5-r.5")
 
     c.var("live2d", c.path("{{ root }}/live2d"))
 

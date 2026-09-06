@@ -1,10 +1,8 @@
-#!/usr/bin/env python3
-
-
 import argparse
 import pathlib
 import re
 import shutil
+
 
 class LineList:
     """
@@ -30,7 +28,7 @@ class LineList:
         Returns None if `prefix` doesn't match.
         """
 
-        rv = [ ]
+        rv = []
 
         while self.lines:
             l = self.lines.pop(0)
@@ -51,7 +49,7 @@ class LineList:
         Returns None if `prefix` doesn't match.
         """
 
-        rv = [ ]
+        rv = []
 
         while self.lines:
             l = self.lines.pop(0)
@@ -72,16 +70,14 @@ class LineList:
 
         return self.lines.pop(0)
 
-
     def rest(self):
         """
         Return the rest of the lines.
         """
 
         rv = self.lines
-        self.lines = [ ]
+        self.lines = []
         return LineList(rv)
-
 
     def removeprefix(self, prefix):
         """
@@ -89,7 +85,7 @@ class LineList:
         on the first line.
         """
 
-        self.lines = [ i.removeprefix(prefix) for i in self.lines ]
+        self.lines = [i.removeprefix(prefix) for i in self.lines]
 
     def sub(self, regex, replacement):
         """
@@ -97,7 +93,7 @@ class LineList:
         with `replacement`.
         """
 
-        self.lines = [ re.sub(regex, replacement, i) for i in self.lines ]
+        self.lines = [re.sub(regex, replacement, i) for i in self.lines]
 
     def replace(self, old, new):
         """
@@ -105,7 +101,7 @@ class LineList:
         with `new`.
         """
 
-        self.lines = [ i.replace(old, new) for i in self.lines ]
+        self.lines = [i.replace(old, new) for i in self.lines]
 
     def replace_word(self, old, new):
         """
@@ -115,14 +111,14 @@ class LineList:
         This does not match the word if it's preceded by -> or .
         """
 
-        self.lines = [ re.sub(r"(?<!\.)(?<!->)\b{}\b".format(old), new, i) for i in self.lines ]
+        self.lines = [re.sub(rf"(?<!\.)(?<!->)\b{old}\b", new, i) for i in self.lines]
 
     def insert_at_start(self, text):
         """
         Inserts `text` at the start of the list.
         """
 
-        self.lines = [ i.rstrip() for i in text.splitlines() ] + self.lines
+        self.lines = [i.rstrip() for i in text.splitlines()] + self.lines
 
     def insert_after(self, prefix, text, skip=0):
         """
@@ -132,7 +128,7 @@ class LineList:
         with `prefix`.
         """
 
-        newlines = [ ]
+        newlines = []
 
         while self.lines:
             line = self.lines.pop(0)
@@ -154,7 +150,7 @@ class LineList:
         Inserts `text` at the start of the list.
         """
 
-        self.lines = self.lines + [ i.rstrip() for i in text.splitlines() ]
+        self.lines = self.lines + [i.rstrip() for i in text.splitlines()]
 
     def text(self):
         """
@@ -162,7 +158,6 @@ class LineList:
         """
 
         return "\n".join(self.lines) + "\n"
-
 
 
 def handle_target(lb):
@@ -187,11 +182,15 @@ def handle_target(lb):
 
     lb.replace("assert(throwflag);", "")
 
-    lb.insert_after("static opfunc_return", """
+    lb.insert_after(
+        "static opfunc_return",
+        """
     ctx->frame->prev_instr = ctx->next_instr++;
-""".replace("NAME", name))
+""".replace("NAME", name),
+    )
 
     return lb
+
 
 def handle_eval_frame(lb, opfuncs):
 
@@ -238,7 +237,7 @@ def handle_eval_frame(lb, opfuncs):
         "_PyInterpreterFrame *frame",
     )
 
-    targets = [ ]
+    targets = []
 
     lines = lb.consume_before("        TARGET(")
 
@@ -248,7 +247,6 @@ def handle_eval_frame(lb, opfuncs):
         targets.append(target)
 
     lines += lb.rest()
-
 
     # Fix up overuse of ctx->frame.
 
@@ -320,7 +318,9 @@ typedef opfunc_return (*opfunc)(opfunc_ctx *ctx, PyThreadState *tstate);
 extern opfunc opfuncs[];
 """)
 
-    lines.insert_after("_PyEval_EvalFrameDefault(", """
+    lines.insert_after(
+        "_PyEval_EvalFrameDefault(",
+        """
 
 #undef DISPATCH
 #define DISPATCH() goto dispatch
@@ -335,7 +335,9 @@ extern opfunc opfuncs[];
     ctx->lltrace = 0;
     ctx->frame = frame;
     ctx->kwnames = NULL;
-""", skip=1)
+""",
+        skip=1,
+    )
 
     lines.insert_at_end("""
 #undef PREDICT
@@ -364,8 +366,9 @@ static opfunc_return opfunc_INSTRUMENTED_LINE(opfunc_ctx *ctx, PyThreadState *ts
 
 """)
 
-
-    lines.insert_after("    dispatch_opcode:", """\
+    lines.insert_after(
+        "    dispatch_opcode:",
+        """\
 // Opcode dispatch.
 
 dispatch:
@@ -451,10 +454,9 @@ dispatch_goto:
 
     }
 
-""", skip=3)
-
-
-
+""",
+        skip=3,
+    )
 
     # Add the table of opfuncs.
     lines.insert_at_end("opfunc opfuncs[] = {")
@@ -466,6 +468,7 @@ dispatch_goto:
 
     return lines
 
+
 def opcode_funcs(ceval):
     ceval = pathlib.Path(ceval)
     opcode_targets = ceval.parent / "opcode_targets.h"
@@ -473,9 +476,9 @@ def opcode_funcs(ceval):
     with open(opcode_targets) as f:
         lines = f.readlines()
 
-    lines = [ i.strip() for i in lines ]
+    lines = [i.strip() for i in lines]
 
-    rv = [ ]
+    rv = []
 
     for i in lines:
         i = i.rstrip(",")
@@ -494,7 +497,7 @@ def include(lines, header, ceval):
     """
 
     with open(ceval.parent / header) as f:
-        header_lines = LineList( i.rstrip() for i in f.readlines())
+        header_lines = LineList(i.rstrip() for i in f.readlines())
 
     rv = lines.consume_before(f'#include "{header}"')
     lines.pop()
@@ -523,10 +526,9 @@ def main():
 
     macros.write_text(mt)
 
-
     # Adjust ceval.c.
-    with open(args.ceval, "r") as f:
-        lines = [ i.rstrip() for i in f.readlines() ]
+    with open(args.ceval) as f:
+        lines = [i.rstrip() for i in f.readlines()]
 
     opfuncs = opcode_funcs(ceval)
 
@@ -538,7 +540,6 @@ def main():
     assert result is not None
     result += lb.consume_to("}")
 
-
     eval_frame = lb.consume_to("_PyEval_EvalFrameDefault")
     assert eval_frame is not None
     eval_frame += lb.consume_to("}")
@@ -549,9 +550,6 @@ def main():
 
     with open(ceval, "w") as f:
         f.write(result.text())
-
-
-
 
 
 if __name__ == "__main__":

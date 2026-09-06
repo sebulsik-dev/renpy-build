@@ -1,21 +1,26 @@
 from renpybuild.context import Context
 from renpybuild.task import task
 
+
 @task(kind="host", platforms="all")
-def download(c : Context):
+def download(c: Context):
     c.clean("{{ tmp }}/source/assimp")
     c.chdir("{{ tmp }}/source")
 
-    c.run("git clone --depth 1 --branch v5.4.3 https://github.com/assimp/assimp")
+    c.clone("https://github.com/assimp/assimp", "--branch v5.4.3")
 
     c.chdir("assimp")
     c.patch("assimp.diff")
 
+
 @task(platforms="all")
-def build(c : Context):
+def build(c: Context):
     c.clean()
 
     c.env("CXXFLAGS", "-Wno-unknown-pragmas {{CXXFLAGS}}")
+
+    if (c.arch == "wasm") or ("clang++-22" in c.environ.get("CXX", "")):
+        c.env("CXXFLAGS", "{{CXXFLAGS}} -Wno-nontrivial-memcall")
 
     c.run("""
         {{ cmake_configure }} {{ cmake_args }}
@@ -33,7 +38,7 @@ def build(c : Context):
 
     try:
         c.run("cmake --build .")
-    except:
+    except Exception:
         c.run("cmake --build . -j 1 -v")
 
     c.run("cmake --install .")

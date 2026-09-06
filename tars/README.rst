@@ -28,7 +28,7 @@ Downloaded from https://developer.android.com/ndk/downloads .
 Live2D Cubism SDK for Native
 ----------------------------
 
-* CubismSDKforNative-4-r.6.2.zip
+* CubismSDKforNative-5-r.5.zip
 
 Downloaded from https://www.live2d.com/en/download/cubism-sdk/ .
 

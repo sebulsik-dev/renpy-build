@@ -1,14 +1,13 @@
 from renpybuild.context import Context
 from renpybuild.task import task
-import os
-import time
 
-@task(kind="python", always=True)
+
+@task(kind="arch", always=True)
 def clean(c: Context):
     c.clean()
 
 
-@task(kind="python", always=True)
+@task(kind="arch", always=True)
 def build(c: Context):
 
     c.run("""
@@ -21,11 +20,11 @@ def build(c: Context):
     -D{{ c.platform|upper }}
 
     -c -o librenpython.o
-    {{ runtime }}/librenpython{{ c.python }}.c
+    {{ runtime }}/librenpython.c
     """)
 
 
-@task(kind="python", always=True, platforms="android")
+@task(kind="arch", always=True, platforms="android")
 def build_android(c: Context):
 
     c.run("""
@@ -37,11 +36,11 @@ def build_android(c: Context):
     -DPYCVER=\\"{{ pycver }}\\"
 
     -c -o librenpython_android.o
-    {{ runtime }}/librenpython{{ c.python }}_android.c
+    {{ runtime }}/librenpython_android.c
     """)
 
 
-@task(kind="python", always=True, platforms="linux")
+@task(kind="arch", always=True, platforms="linux")
 def link_linux(c: Context):
 
     c.run("""
@@ -64,14 +63,16 @@ def link_linux(c: Context):
     -lswresample
     -lavutil
 
-    -lSDL2_image
-    -lSDL2
+    -lSDL3_image
+    -lSDL3
     -lavif
     -laom
     -lyuv
     -ljpeg
     -lpng
     -lwebp
+    -lwebpmux
+    -lwebpdemux
     -lsharpyuv
     -lfribidi
     -lharfbuzz
@@ -93,7 +94,7 @@ def link_linux(c: Context):
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
     -o python
-    {{ runtime }}/renpython{{ c.python }}_posix.c
+    {{ runtime }}/renpython_posix.c
 
     librenpython.so
     -Wl,-rpath -Wl,$ORIGIN
@@ -102,7 +103,7 @@ def link_linux(c: Context):
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
     -o renpy
-    {{ runtime }}/launcher{{ c.python }}_posix.c
+    {{ runtime }}/launcher_posix.c
 
     librenpython.so
     -Wl,-rpath -Wl,$ORIGIN
@@ -118,7 +119,7 @@ def link_linux(c: Context):
     c.run("""install renpy {{ dlpa }}/renpy""")
 
 
-@task(kind="python", always=True, platforms="android")
+@task(kind="arch", always=True, platforms="android")
 def link_android(c: Context):
 
     c.run("""
@@ -142,8 +143,8 @@ def link_android(c: Context):
     -lswresample
     -lavutil
 
-    -lSDL2_image
-    -lSDL2
+    -lSDL3_image
+    -lSDL3
 
     -lGLESv1_CM
     -lGLESv2
@@ -156,6 +157,8 @@ def link_android(c: Context):
     -ljpeg
     -lpng
     -lwebp
+    -lwebpmux
+    -lwebpdemux
     -lsharpyuv
     -lharfbuzz
     -lbrotlidec
@@ -185,7 +188,7 @@ def link_android(c: Context):
     c.run("install librenpython.so {{ jniLibs }}")
 
 
-@task(kind="python", always=True, platforms="mac")
+@task(kind="arch", always=True, platforms="mac")
 def link_mac(c: Context):
 
     c.run("""
@@ -208,14 +211,16 @@ def link_mac(c: Context):
     -lswresample
     -lavutil
 
-    -lSDL2_image
-    -lSDL2
+    -lSDL3_image
+    -lSDL3
     -lavif
     -laom
     -lyuv
     -ljpeg
     -lpng
     -lwebp
+    -lwebpmux
+    -lwebpdemux
     -lsharpyuv
     -lharfbuzz
     -lbrotlidec
@@ -231,6 +236,9 @@ def link_mac(c: Context):
     -lm
 
     -liconv
+    -Wl,-weak_framework,UniformTypeIdentifiers
+    -Wl,-framework,Metal
+    -Wl,-framework,QuartzCore
     -Wl,-framework,CoreAudio
     -Wl,-framework,AudioToolbox
     -Wl,-framework,ForceFeedback
@@ -248,7 +256,7 @@ def link_mac(c: Context):
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
     -o python
-    {{ runtime }}/renpython{{ c.python }}_posix.c
+    {{ runtime }}/renpython_posix.c
 
     librenpython.dylib
     """)
@@ -256,7 +264,7 @@ def link_mac(c: Context):
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
     -o renpy
-    {{ runtime }}/launcher{{ c.python }}_posix.c
+    {{ runtime }}/launcher_posix.c
 
     librenpython.dylib
     """)
@@ -265,21 +273,18 @@ def link_mac(c: Context):
     if not c.args.nostrip and not c.arch == "arm64":
         c.run("""{{ STRIP }} -S librenpython.dylib python renpy""")
 
-    c.run("""install -d {{ install }}/mac{{python}}""")
-    c.run("""install librenpython.dylib {{ install }}/mac{{python}}""")
-    c.run("""install python {{ install }}/mac{{python}}/python""")
-    c.run("""install python {{ install }}/mac{{python}}/pythonw""")
-    c.run("""install renpy {{ install }}/mac{{python}}/renpy""")
+    c.run("""install -d {{ install }}/mac""")
+    c.run("""install librenpython.dylib {{ install }}/mac""")
+    c.run("""install python {{ install }}/mac/python""")
+    c.run("""install python {{ install }}/mac/pythonw""")
+    c.run("""install renpy {{ install }}/mac/renpy""")
 
 
-
-@task(kind="host-python", platforms="mac", always=True)
+@task(kind="platform", platforms="mac", always=True)
 def lipo_mac(c: Context):
 
-    c.var("dlpa", "{{distlib}}/py{{ python }}-{{ platform }}-universal")
-
-    c.var("ac", "{{ renpy }}/renpy{{ python }}.app/Contents")
-    c.var("acm", "{{ renpy }}/renpy{{ python }}.app/Contents/MacOS")
+    c.var("ac", "{{ renpy }}/renpy.app/Contents")
+    c.var("acm", "{{ renpy }}/renpy.app/Contents/MacOS")
 
     c.run("""install -d {{ dlpa }}""")
     c.run("""install -d {{ acm }}""")
@@ -293,8 +298,8 @@ def lipo_mac(c: Context):
         c.run("""
             {{ lipo }} -create
             -output {{ dlpa }}/{{ fn }}
-            {{tmp}}/install.mac-x86_64/mac{{python}}/{{fn}}
-            {{tmp}}/install.mac-arm64/mac{{python}}/{{fn}}
+            {{tmp}}/install.mac-x86_64/mac/{{fn}}
+            {{tmp}}/install.mac-arm64/mac/{{fn}}
             """)
 
         c.run("install {{ dlpa }}/{{ fn }} {{ acm }}/{{ fn }}")
@@ -311,12 +316,12 @@ def fix_pe(c: Context, fn):
     """
 
     import sys
+
     print(sys.executable, sys.path)
 
     fn = str(c.path(fn))
 
     with open(c.path("fix_pe.py"), "w") as f:
-
         f.write("""\
 import sys
 print(sys.executable, sys.path)
@@ -336,8 +341,7 @@ pe.write(fn)
     c.run("""{{ hostpython }} fix_pe.py """ + fn)
 
 
-
-@task(kind="python", always=True, platforms="windows")
+@task(kind="arch", always=True, platforms="windows")
 def link_windows(c: Context):
 
     c.run("""
@@ -361,8 +365,8 @@ def link_windows(c: Context):
     -lswresample
     -lavutil
 
-    -lSDL2_image
-    -lSDL2
+    -lSDL3_image
+    -lSDL3
     -lopengl32
     -lavif
     -laom
@@ -370,6 +374,8 @@ def link_windows(c: Context):
     -ljpeg
     -lpng16
     -lwebp
+    -lwebpmux
+    -lwebpdemux
     -lsharpyuv
     -lharfbuzz
     -lbrotlidec
@@ -401,6 +407,7 @@ def link_windows(c: Context):
     -lsetupapi
     -lversion
     -luuid
+    -lcrypt32
 
     -Wl,--export-all-symbols
     """)
@@ -411,35 +418,37 @@ def link_windows(c: Context):
 
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
-    -mconsole {% if c.python != '2' %}-municode {% endif %}
+    -mconsole -municode
     -o python.exe
-    {{ runtime }}/renpython{{ c.python }}_win.c
+    {{ runtime }}/renpython_win.c
     renpy_resources.o
     librenpython.dll
     """)
 
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
-    -mwindows {% if c.python != '2' %}-municode {% endif %}
+    -mwindows -municode
     -o pythonw.exe
-    {{ runtime }}/renpython{{ c.python }}_win.c
+    {{ runtime }}/renpython_win.c
     renpy_resources.o
     librenpython.dll
     """)
 
     c.run("""
     {{ CC }} {{ CDFLAGS }} {{ LDFLAGS }}
-    -mwindows {% if c.python != '2' %}-municode {% endif %}
+    -mwindows -municode
     -DPLATFORM=\\"{{ c.platform }}\\" -DARCH=\\"{{ c.arch }}\\"
     -o renpy.exe
-    {{ runtime }}/launcher{{ c.python }}_win.c
+    {{ runtime }}/launcher_win.c
     renpy_resources.o
     """)
 
     c.run("""install -m 755 {{install}}/bin/lib{{ pythonver }}.dll lib{{ pythonver }}.dll""")
 
     if not c.args.nostrip:
-        c.run("""{{ STRIP }} --strip-unneeded lib{{ pythonver }}.dll librenpython.dll python.exe pythonw.exe renpy.exe""")
+        c.run(
+            """{{ STRIP }} --strip-unneeded lib{{ pythonver }}.dll librenpython.dll python.exe pythonw.exe renpy.exe"""
+        )
         c.run("""{{ STRIP }} -R .reloc python.exe pythonw.exe renpy.exe""")
 
     fix_pe(c, "python.exe")
@@ -448,31 +457,34 @@ def link_windows(c: Context):
 
     c.run("""install -d {{ dlpa }}""")
     c.run("""install librenpython.dll python.exe pythonw.exe {{ dlpa }}""")
-    c.run("""install lib{{ pythonver }}.dll  {{ dlpa }}""")
+    c.run("""install lib{{ pythonver }}.dll {{ dlpa }}""")
     c.run("""install renpy.exe {{ dlpa }}/renpy.exe""")
 
     if c.arch == "x86_64":
-        c.run("""install renpy.exe {{ renpy }}/renpy{{ python }}.exe""")
         c.copy("{{cross}}/llvm-mingw/x86_64-w64-mingw32/bin/libwinpthread-1.dll", "{{ dlpa }}/libwinpthread-1.dll")
-        c.copy("{{cross}}/llvm-mingw/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt", "{{ dlpa }}/libwinpthread-1.txt")
+        c.copy(
+            "{{cross}}/llvm-mingw/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt",
+            "{{ dlpa }}/libwinpthread-1.txt",
+        )
 
-        if c.python == "3":
-            c.run("""install renpy.exe {{ renpy }}/renpy.exe""")
+        c.run("""install renpy.exe {{ renpy }}/renpy.exe""")
 
 
-@task(kind="python", always=True, platforms="ios")
+@task(kind="arch", always=True, platforms="ios")
 def link_ios(c: Context):
 
     c.unlink("librenpython.a")
-    c.run("""{{ AR }} -r librenpython.a librenpython.o""")
+    c.run("""{{ AR }} --format=darwin -r librenpython.a librenpython.o""")
     c.run("""install -d {{install}}/lib""")
     c.run("""install librenpython.a {{ install }}/lib""")
 
-@task(kind="python", platforms="web", pythons="3", always=True)
+
+@task(kind="arch", platforms="web", always=True)
 def clean_web(c: Context):
     c.clean()
 
-@task(kind="python", platforms="web", pythons="3", always=True)
+
+@task(kind="arch", platforms="web", always=True)
 def build_web(c: Context):
 
     c.run("""
@@ -485,7 +497,7 @@ def build_web(c: Context):
     -D{{ c.platform|upper }}
 
     -c -o librenpython.o
-    {{ runtime }}/librenpython{{ c.python }}.c
+    {{ runtime }}/librenpython.c
     """)
 
     c.run("""
@@ -498,83 +510,113 @@ def build_web(c: Context):
     -D{{ c.platform|upper }}
 
     -c -o launcher.o
-    {{ runtime }}/launcher{{ c.python }}_posix.c
+    {{ runtime }}/launcher_posix.c
     """)
 
-@task(kind="python", platforms="web", pythons="3", always=True)
+
+@task(kind="arch", platforms="web", always=True)
 def link_web(c: Context):
 
     debug_asyncify = False
 
     asyncify_only = [
-        'PyEval_EvalCode',
-        'PyImport_Import',
-        'PyImport_ImportModule',
-
-        'PyImport_ImportModuleLevelObject',
-        'PyObject_Call',
-        'PyObject_CallFunction',
-        'PyObject_CallFunctionObjArgs',
-        'PyObject_CallMethod',
-        'PyObject_CallMethodObjArgs',
-        'PyObject_CallNoArgs',
-        'PyObject_CallObject',
-        'PyObject_CallOneArg',
-        'PyObject_Vectorcall',
-        'PyVectorcall_Call',
-        '_PyEval_EvalFrameDefault',
-        '_PyEval_Vector',
-        '_PyFunction_Vectorcall',
-        '_PyObject_FastCall',
-        '_PyObject_Call',
-        '_PyObject_CallFunction_SizeT',
-        '_PyObject_CallFunctionVa',
-        '_PyObject_CallMethodId',
-        '_PyObject_CallMethodIdObjArgs',
-        '_PyObject_CallMethodIdOneArg',
-        '_PyObject_CallMethod_SizeT',
-        '_PyObject_Call_Prepend',
-        '_PyObject_FastCallDictTstate',
-        '_PyObject_MakeTpCall',
-        '_PyRun_AnyFileObject',
-        '_PyRun_SimpleFileObject',
-        'PyRun_StringFlags',
-        '_PyVectorcall_Call',
-        '__pyx_pw_10emscripten_19sleep',
-        'builtin___import__',
-        'builtin_exec',
-        'builtin_eval',
-        'cfunction_vectorcall_FASTCALL_KEYWORDS',
-        'cfunction_vectorcall_O',
-        'main',
-        'method_vectorcall',
-        'object_vacall',
-        'opfunc_*',
-        'run_mod',
-        'slot_tp_call',
-        'byn$fpcast-emu$_PyFunction_Vectorcall',
-        'byn$fpcast-emu$__pyx_pw_10emscripten_19sleep',
-        'byn$fpcast-emu$builtin___import__',
-        'byn$fpcast-emu$builtin_exec',
-        'byn$fpcast-emu$builtin_eval',
-        'byn$fpcast-emu$cfunction_vectorcall_FASTCALL_KEYWORDS',
-        'byn$fpcast-emu$cfunction_vectorcall_O',
-        'byn$fpcast-emu$method_vectorcall',
-        'byn$fpcast-emu$slot_tp_call',
-        'byn$fpcast-emu$opfunc_*',
-        '__Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS',
-        'byn$fpcast-emu$__Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS',
-        'partial_vectorcall',
-        'byn$fpcast-emu$partial_vectorcall',
-        'slot_tp_init',
-        'byn$fpcast-emu$slot_tp_init',
-        'type_call',
-        'byn$fpcast-emu$type_call',
-        ]
+        "PyEval_EvalCode",
+        "PyImport_Import",
+        "PyImport_ImportModule",
+        "PyImport_ImportModuleLevelObject",
+        "PyObject_Call",
+        "PyObject_CallFunction",
+        "PyObject_CallFunctionObjArgs",
+        "PyObject_CallMethod",
+        "PyObject_CallMethodObjArgs",
+        "PyObject_CallNoArgs",
+        "PyObject_CallObject",
+        "PyObject_CallOneArg",
+        "PyObject_Vectorcall",
+        "PyVectorcall_Call",
+        "_PyEval_EvalFrameDefault",
+        "_PyEval_Vector",
+        "_PyFunction_Vectorcall",
+        "_PyObject_FastCall",
+        "_PyObject_Call",
+        "_PyObject_CallFunction_SizeT",
+        "_PyObject_CallFunctionVa",
+        "_PyObject_CallMethodId",
+        "_PyObject_CallMethodIdObjArgs",
+        "_PyObject_CallMethodIdOneArg",
+        "_PyObject_CallMethod_SizeT",
+        "_PyObject_Call_Prepend",
+        "_PyObject_FastCallDictTstate",
+        "_PyObject_MakeTpCall",
+        "_PyRun_AnyFileObject",
+        "_PyRun_SimpleFileObject",
+        "PyRun_StringFlags",
+        "_PyVectorcall_Call",
+        "__pyx_pw_10emscripten_19sleep",
+        "builtin___import__",
+        "builtin_exec",
+        "builtin_eval",
+        "cfunction_vectorcall_FASTCALL_KEYWORDS",
+        "cfunction_vectorcall_O",
+        "main",
+        "method_vectorcall",
+        "object_vacall",
+        "opfunc_*",
+        "run_mod",
+        "slot_tp_call",
+        "byn$fpcast-emu$_PyFunction_Vectorcall",
+        "byn$fpcast-emu$__pyx_pw_10emscripten_19sleep",
+        "byn$fpcast-emu$builtin___import__",
+        "byn$fpcast-emu$builtin_exec",
+        "byn$fpcast-emu$builtin_eval",
+        "byn$fpcast-emu$cfunction_vectorcall_FASTCALL_KEYWORDS",
+        "byn$fpcast-emu$cfunction_vectorcall_O",
+        "byn$fpcast-emu$method_vectorcall",
+        "byn$fpcast-emu$slot_tp_call",
+        "byn$fpcast-emu$opfunc_*",
+        "__Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS",
+        "byn$fpcast-emu$__Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS",
+        "partial_vectorcall",
+        "byn$fpcast-emu$partial_vectorcall",
+        "slot_tp_init",
+        "byn$fpcast-emu$slot_tp_init",
+        "type_call",
+        "byn$fpcast-emu$type_call",
+        # async function for ECDSA signing (ecsign.pyx)
+        "byn$fpcast-emu$__pyx_pw_5renpy_6ecsign_9validate_private_key",
+        "byn$fpcast-emu$__pyx_pw_5renpy_6ecsign_7get_public_key_from_private",
+        "byn$fpcast-emu$__pyx_pw_5renpy_6ecsign_5verify_data",
+        "byn$fpcast-emu$__pyx_pw_5renpy_6ecsign_3sign_data",
+        "byn$fpcast-emu$__pyx_pw_5renpy_6ecsign_1generate_private_key",
+        "byn$fpcast-emu$__pyx_pw_5renpy_6ecsign_11validate_public_key",
+        "__pyx_pw_5renpy_6ecsign_9validate_private_key",
+        "__pyx_pw_5renpy_6ecsign_7get_public_key_from_private",
+        "__pyx_pw_5renpy_6ecsign_5verify_data",
+        "__pyx_pw_5renpy_6ecsign_3sign_data",
+        "__pyx_pw_5renpy_6ecsign_1generate_private_key",
+        "__pyx_pw_5renpy_6ecsign_11validate_public_key",
+        "byn$fpcast-emu$gen_close",
+        "byn$fpcast-emu$gen_close_iter",
+        "byn$fpcast-emu$gen_iternext",
+        "byn$fpcast-emu$gen_send",
+        "byn$fpcast-emu$gen_send_ex",
+        "byn$fpcast-emu$gen_send_ex2",
+        "byn$fpcast-emu$gen_throw",
+        "byn$fpcast-emu$_gen_throw",
+        "gen_close",
+        "gen_close_iter",
+        "gen_iternext",
+        "gen_send",
+        "gen_send_ex",
+        "gen_send_ex2",
+        "gen_throw",
+        "_gen_throw",
+    ]
 
     c.var("asyncify_only", repr(asyncify_only).replace(" ", ""))
 
-    c.run("""
+    c.run(
+        """
     {{ CXX }} {{ LDFLAGS }}
 
     {% if debug_asyncify %}
@@ -598,14 +640,16 @@ def link_web(c: Context):
     -lswscale
     -lswresample
     -lavutil
-    -lSDL2_image
-    -lSDL2
+    -lSDL3_image
+    -lSDL3
     -lavif
     -laom
     -lyuv
     -ljpeg
     -lpng
     -lwebp
+    -lwebpmux
+    -lwebpdemux
     -lsharpyuv
     -lharfbuzz
     -lbrotlidec
@@ -641,22 +685,21 @@ def link_web(c: Context):
     -sMINIFY_HTML=0
 
     --shell-file {{ runtime }}/web/shell.html
-    """, debug_asyncify=debug_asyncify)
+    """,
+        debug_asyncify=debug_asyncify,
+    )
 
-    c.run("""install -d {{ renpy }}/web3""")
-    c.run("""install renpy.html {{ renpy }}/web3/index.html""")
-    c.run("""install renpy.html.symbols {{ renpy }}/web3/index.html.symbols""")
-    c.run("""install {{ runtime }}/web/renpy-pre.js {{ renpy }}/web3/renpy-pre.js""")
-    c.run("""install renpy.js {{ renpy }}/web3/renpy.js""")
-    c.run("""install renpy.wasm {{ renpy }}/web3/renpy.wasm""")
-    c.run("""install renpy.data {{ renpy }}/web3/renpy.data""")
-    c.run("""install {{runtime}}/web/web-presplash.jpg {{ renpy }}/web3/web-presplash.jpg""")
-    c.run("""install {{runtime}}/web/web-icon.png {{ renpy }}/web3/web-icon.png""")
-    c.run("""install {{runtime}}/web/manifest.json {{ renpy }}/web3/manifest.json""")
-    c.run("""install {{runtime}}/web/service-worker.js {{ renpy }}/web3/service-worker.js""")
+    c.run("""install -d {{ renpy }}/web""")
+    c.run("""install renpy.html {{ renpy }}/web/index.html""")
+    c.run("""install renpy.html.symbols {{ renpy }}/web/index.html.symbols""")
+    c.run("""install {{ runtime }}/web/renpy-pre.js {{ renpy }}/web/renpy-pre.js""")
+    c.run("""install renpy.js {{ renpy }}/web/renpy.js""")
+    c.run("""install renpy.wasm {{ renpy }}/web/renpy.wasm""")
+    c.run("""install renpy.data {{ renpy }}/web/renpy.data""")
+    c.run("""install {{runtime}}/web/web-presplash.jpg {{ renpy }}/web/web-presplash.jpg""")
+    c.run("""install {{runtime}}/web/web-icon.png {{ renpy }}/web/web-icon.png""")
+    c.run("""install {{runtime}}/web/manifest.json {{ renpy }}/web/manifest.json""")
+    c.run("""install {{runtime}}/web/service-worker.js {{ renpy }}/web/service-worker.js""")
 
     if debug_asyncify:
-        c.run("""install renpy.wasm.map {{ renpy }}/web3/renpy.wasm.map""")
-
-    # -sASYNCIFY_IGNORE_INDIRECT=1
-    # -sASSERTIONS=1
+        c.run("""install renpy.wasm.map {{ renpy }}/web/renpy.wasm.map""")
